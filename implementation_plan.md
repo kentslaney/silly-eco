@@ -1,24 +1,48 @@
-# Implementation Plan - AVP Spatial Target Studio, Error-Correcting QR Origin & Connected Free Scanner Ecosystem
+# Implementation Plan - AVP Spatial Target Studio, Error-Correcting QR Origin & "Silly Bells" Connected Ecosystem
 
 Build an end-to-end spatial computing ecosystem featuring:
 1. **Apple Vision Pro (AVP) App ("TargetStudio AVP")**: Spatial authoring tool to place and configure spherical targets in physical space, calibrate a reference origin, and generate/print a precision paper QR code.
-2. **Precision Paper QR Code with Corner Line Segments**: Printable fiducial sheet (PDF/AirPrint) with a central course QR code and 4 calibrated straight line segments extending from its corners to eliminate origin tilt and position drift.
-3. **Free Scanner & Preview App ("TargetScanner Free" - iOS & visionOS)**: AR scanner that traces the corner line segments AR-style to compute an error-corrected spatial origin, renders the placed spherical targets in AR, provides a community browser to preview others' targets, and includes a direct bridge to a connected $1 app.
-4. **Connected $1 App ("TargetBlaster Pro" - iOS & visionOS)**: The game app unlocked via deep linking (`targetblaster://`), loading the scanned course for active timed shooting with projectile physics, spatial audio, and score tracking.
-5. **TargetCore Framework**: Shared Swift package containing the course data models, corner-line tracing and error-correction geometry engine, PDF printable sheet generator, and URL scheme serialization codecs.
+2. **Precision Paper QR Code with Corner Line Segments**: Printable fiducial sheet (PDF/AirPrint) with a central course QR code and 4 calibrated straight line segments extending outward from its corners to eliminate origin tilt and position drift.
+3. **Free Scanner & Preview App ("TargetScanner Free" - iOS & visionOS, with PWA roadmap)**: AR scanner that traces the corner line segments AR-style to compute an error-corrected spatial origin, renders placed spherical targets in AR, previews others' courses, and bridges directly to the connected $1 iOS app **"Silly Bells"**.
+4. **Connected $1 App ("Silly Bells" - iOS)**: The existing paid app opened via deep link (`sillybells://course?data=...`), loading the course data and calibrated origin for active gameplay.
+5. **TargetCore Framework**: Shared Swift package containing course data models, corner-line tracing and error-correction geometry math, PDF printable sheet generator, and URL scheme serialization codecs.
 
 ---
 
 ## User Review Required
 
 > [!IMPORTANT]
-> **Corner Line Segment Error-Correction Design**:
-> Standard camera QR detection on mobile/headset AR has an angular error of ~2°–5° due to the small baseline (8–10 cm) of paper QR codes. At room scale (4–6 meters), this causes target positions to drift by 20–40 cm.
-> Our printable sheet features 4 high-contrast straight line segments extending diagonally outward at 45° from the 4 corners of the QR code (calibrated to 60 mm length with perpendicular end tick marks). The scanner traces these line segments in the camera feed using Vision line detection and edge gradient tracing. By solving an overdetermined 8-point / 4-line perspective alignment, origin tilt error is reduced to < 0.2°, locking target positions to millimeter precision!
+> **Connected App Name & Deep Link**:
+> The connected $1 app is **"Silly Bells"** on iOS. The scanner app provides an action card ("Open in Silly Bells ($1)") that fires the deep link `sillybells://course?v=1&data=<payload>` with a fallback to the App Store product view if not installed.
 
 > [!NOTE]
-> **Self-Contained Offline Scanning vs Cloud Storage**:
-> To ensure instantaneous scanning without requiring third-party cloud infrastructure or account logins, courses are compactly encoded directly into the QR code payload (and URL scheme payload) via compressed JSON / Base64. Community courses can also be previewed directly from an included library or expanded via custom URL endpoints.
+> **Long-Term PWA Evolution**:
+> The free scanner is planned to eventually run as a cross-platform Progressive Web App (PWA) using WebXR / WebCam and WebAssembly. To ensure smooth future migration, all geometry, corner line tracing algorithms, and payload codecs in `TargetCore` are structured with platform-agnostic pure math/data representations that can directly map to TypeScript / WebAssembly.
+
+---
+
+## Git Commit Review Anchoring Specification
+
+To establish an immutable audit trail linking code changes directly to this reviewed implementation plan, we propose using **Git Trailers** (RFC 822-style key-value metadata in commit message footers).
+
+### Standard Commit Format with Review Anchors:
+
+```text
+<type>(<scope>): <short summary>
+
+<detailed description of what was changed and why>
+
+Review-Doc: implementation_plan.md
+Review-Anchor: #component-1-targetcore-shared-multi-platform-swift-package
+Reviewed-By: Kent Slaney <kent@slaney.org>
+Review-Status: Approved
+Approved-At: 2026-09-02T16:10:22-07:00
+```
+
+### Why this works well:
+1. **Machine-Readable**: Git natively parses these via `git log --format="%(trailers)"` or `git interpret-trailers`.
+2. **Line/Section Traceability**: `Review-Anchor` points to the exact Markdown section heading or line range in the plan that authorized the change.
+3. **GitHub / IDE Integration**: Markdown anchors and file links render as clickable navigation targets in web interfaces and local IDEs.
 
 ---
 
@@ -38,15 +62,21 @@ Build an end-to-end spatial computing ecosystem featuring:
         |                                 |                                 |
         v                                 v                                 v
 +-----------------------+     +-----------------------+     +-----------------------+
-|   TargetStudio AVP    |     |  TargetScanner Free   |     |   TargetBlaster Pro   |
-|     (visionOS)        |     |   (iOS & visionOS)    |     |   (Connected $1 App)  |
-| - ImmersiveSpace 3D   |     | - ARKit Camera Feed   |     | - Deep Link Handler   |
-|   target placement    |     | - AR Line Tracing HUD |     |   (targetblaster://)  |
-| - Spatial transform   |     | - 3D Target Preview   |     | - Active Timed Mode   |
-|   manipulation        |     | - Community Browser   |     | - Tap-to-shoot weapon |
-| - Physical Origin set |     | - "Open in $1 App"    |     | - Particle effects    |
-| - AirPrint/PDF export |     |   bridge & StoreKit   |     | - Spatial sound & HUD |
+|   TargetStudio AVP    |     |  TargetScanner Free   |     |      Silly Bells      |
+|     (visionOS)        |     |   (iOS & visionOS)    |     |  (Connected $1 App)   |
+| - ImmersiveSpace 3D   |     | - ARKit Camera Feed   |     | - Existing iOS App    |
+|   target placement    |     | - AR Line Tracing HUD |     | - Deep Link Handler   |
+| - Spatial transform   |     | - 3D Target Preview   |     |   (sillybells://)     |
+|   manipulation        |     | - Community Browser   |     | - Loads course data & |
+| - Physical Origin set |     | - "Open in Silly      |     |   calibrated origin   |
+| - AirPrint/PDF export |     |    Bells ($1)" bridge |     | - Active gameplay     |
 +-----------------------+     +-----------------------+     +-----------------------+
+                                          |
+                                          v (Long-term Roadmap)
+                              +-----------------------+
+                              |      Scanner PWA      |
+                              |   (WebXR / WebGL)     |
+                              +-----------------------+
 ```
 
 ---
@@ -74,6 +104,7 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
   - Bottom-Left: extends towards $(-x, -y)$
 - Error metrics calculation: compares detected line vectors in screen space against theoretical projected line segments from the initial QR pose.
 - Pose refinement: computes the rotation correction matrix $\Delta R$ and translation offset $\Delta t$ minimizing re-projection residuals across the 4 corner line segments.
+- Modularized math designed for easy porting to WebGL / WebXR shaders and WebAssembly in the PWA.
 
 #### [NEW] `Sources/TargetCore/Rendering/PrintableSheetRenderer.swift`
 - Generates high-definition vector PDF and UIImage/CGImage for the calibration sheet:
@@ -85,7 +116,7 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
 
 #### [NEW] `Sources/TargetCore/Serialization/CoursePayloadCodec.swift`
 - Compact JSON + Gzip/Base64 serialization for encoding full course data into QR codes and URL schemes:
-  - Deep link format: `targetblaster://course?v=1&data=<base64_payload>`.
+  - Deep link format: `sillybells://course?v=1&data=<base64_payload>`.
   - Also generates standard web fallback links.
 
 #### [NEW] `Sources/TargetCore/Storage/CommunityCourseStore.swift`
@@ -99,7 +130,7 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
 #### [NEW] `Tests/TargetCoreTests/TargetCoreTests.swift`
 - Comprehensive unit tests verifying:
   - Model serialization and deserialization round-trip.
-  - Payload compression and URL scheme parsing.
+  - Payload compression and `sillybells://` URL scheme parsing.
   - Geometry math and corner ray projection calculations.
   - PDF document generation and dimensions.
 
@@ -115,10 +146,10 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
 
 #### [NEW] `Sources/TargetStudioAVP/Views/SpatialTargetAuthoringView.swift`
 - `RealityView` implementation in `ImmersiveSpace`:
-  - Visual Origin Entity: Rendered at $(0, 0, 0)$ showing the physical QR paper preview with corner line segments and 3D axis arrows.
+  - Visual Origin Entity: Rendered at $(0, 0, 0)$ showing physical QR paper preview with corner line segments and 3D axis arrows.
   - Interactive Target Entities: Spheres with glowing neon materials and floating billboard distance tags.
   - Gesture handling: Spatial Drag Gesture to move spheres in 3D, Pinch to select, Double-tap to duplicate/delete.
-  - Live measurement lines connecting the origin to each target with distance labels (e.g. "2.45 m @ +32°").
+  - Live measurement lines connecting origin to each target with distance labels (e.g. "2.45 m @ +32°").
 
 #### [NEW] `Sources/TargetStudioAVP/Views/TargetInspectorPalette.swift`
 - Floating spatial palette:
@@ -158,40 +189,19 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
 
 #### [NEW] `Sources/TargetScannerFree/Views/OpenConnectedAppBanner.swift`
 - Native call-to-action banner on iOS:
-  - "Play Course in TargetBlaster Pro ($1)"
-  - Deep-link button: opens `targetblaster://course?v=1&data=...`.
-  - Fallback StoreKit modal: presents `SKStoreProductViewController` / simulated App Store modal showing "$0.99 - TargetBlaster Pro: AR Spatial Arcade".
+  - "Play Course in Silly Bells ($1)"
+  - Deep-link button: opens `sillybells://course?v=1&data=...`.
+  - Fallback StoreKit modal: presents `SKStoreProductViewController` / simulated App Store modal showing "$0.99 - Silly Bells".
   - Share link button to copy or send the course launch URL.
 
 ---
 
-### Component 4: `TargetBlasterPro` (Connected $1 Pro Game App)
-
-#### [NEW] `Sources/TargetBlasterPro/App/TargetBlasterApp.swift`
-- Registers URL scheme `targetblaster://` in `Info.plist` and handles deep links via `.onOpenURL`.
-
-#### [NEW] `Sources/TargetBlasterPro/Game/GameEngine.swift`
-- Game state manager:
-  - Calibrated origin coordinate frame.
-  - Active targets with hit detection, particle explosion effects, and spatial audio sounds.
-  - 60-second countdown timer, score counter, and combo streak multipliers.
-
-#### [NEW] `Sources/TargetBlasterPro/Views/GameARView.swift`
-- Fullscreen AR view with weapon reticle:
-  - Center-screen crosshairs with raycast projectile shooting.
-  - Tap screen to fire laser bolt towards spheres.
-  - Particle burst entity when a spherical target is struck.
-  - Post-game summary card with Accuracy %, Total Score, and Leaderboard rank.
-
----
-
-### Component 5: Xcode Project & Build Configuration
+### Component 4: Xcode Project & Build Configuration
 
 #### [NEW] `TargetEco.xcodeproj` / Project Setup
-- Configures multi-target Xcode project or workspace linking `TargetCore` to:
+- Configures multi-target Xcode project linking `TargetCore` to:
   - `TargetStudioAVP` (Targeting visionOS)
   - `TargetScannerFree` (Targeting iOS & visionOS)
-  - `TargetBlasterPro` (Targeting iOS & visionOS)
 - Includes camera usage descriptions (`NSCameraUsageDescription`), URL scheme configurations, and build settings.
 
 ---
@@ -204,6 +214,7 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
   swift test
   ```
   - Tests Course JSON and compact payload serialization/deserialization.
+  - Tests `sillybells://` deep link encoding and URL parameter extraction.
   - Tests Corner line error-correction ray math and residual calculations.
   - Tests PDF printable sheet generation.
 
@@ -216,7 +227,6 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
   ```bash
   xcodebuild -scheme TargetScannerFree -destination "generic/platform=iOS Simulator" build
   xcodebuild -scheme TargetStudioAVP -destination "generic/platform=visionOS Simulator" build
-  xcodebuild -scheme TargetBlasterPro -destination "generic/platform=iOS Simulator" build
   ```
 
 ### Manual & Interactive Verification
@@ -224,4 +234,4 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS.
 2. **Printable Sheet**: Inspect generated PDF to verify crisp QR code, 4 corner line segments with mm graduations, and axis markers.
 3. **Corner Line Tracing HUD**: Verify camera HUD visual feedback when simulating QR code with corner lines.
 4. **Community Preview**: Browse preloaded courses, inspect 3D layout, and verify target metrics.
-5. **Deep Link & $1 App Bridge**: Trigger "Open in TargetBlaster Pro ($1)" button, verify URL scheme payload transmission, and verify game initiation.
+5. **Deep Link & "Silly Bells" Bridge**: Trigger "Open in Silly Bells ($1)" button, verify URL scheme payload transmission (`sillybells://course?data=...`), and verify fallback modal behavior.
