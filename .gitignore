@@ -2,8 +2,5 @@ __pycache__/
 *.py[cod]
 *$py.class
 .DS_Store
-.review_anchors.json
-.review_config.json
-.review_qa.json
 .venv/
 venv/
