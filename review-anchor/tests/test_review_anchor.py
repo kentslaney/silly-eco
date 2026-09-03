@@ -75,12 +75,29 @@ class TestGitAnchoring(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_backwards_compatible_commit_format(self):
+    def test_model_only_mode(self):
         anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
         anchor.model_header = "gemini 3.8 flash high"
+        anchor.commit_mode = "model_only"
 
         parsed = MarkdownParser.parse_file(self.plan_path)
-        # Line 5 is the alert
+        anchor.add_comment(line=parsed[0], comment_text="Test comment")
+
+        # In model_only mode (pending-push style), commit message is strictly the model name
+        msg = anchor.format_commit_message(general_prompt="Should be omitted in model_only")
+        self.assertEqual(msg, "gemini 3.8 flash high")
+
+        # Review body is available for Git Notes
+        review_notes = anchor.format_review_body()
+        self.assertIn("[Line 1]", review_notes)
+        self.assertIn("Test comment", review_notes)
+
+    def test_backwards_compatible_detailed_commit_format(self):
+        anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
+        anchor.model_header = "gemini 3.8 flash high"
+        anchor.commit_mode = "detailed"
+
+        parsed = MarkdownParser.parse_file(self.plan_path)
         line5 = parsed[4]
 
         anchor.add_comment(
@@ -98,7 +115,7 @@ class TestGitAnchoring(unittest.TestCase):
 
         # Subject line must match model header
         self.assertEqual(lines[0], "gemini 3.8 flash high")
-        self.assertEqual(lines[1], "")  # Blank line after subject
+        self.assertEqual(lines[1], "")
 
         # Body contains general prompt
         self.assertIn("Updated review comments on implementation plan.", commit_msg)
@@ -111,6 +128,16 @@ class TestGitAnchoring(unittest.TestCase):
         self.assertIn("Review-Doc: implementation_plan.md", commit_msg)
         self.assertIn("Review-Anchor: #user-review-required", commit_msg)
 
+    def test_config_persistence(self):
+        anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
+        anchor.model_header = "custom-model-2.0"
+        anchor.commit_mode = "model_only"
+        anchor.save_config()
+
+        anchor2 = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
+        self.assertEqual(anchor2.model_header, "custom-model-2.0")
+        self.assertEqual(anchor2.commit_mode, "model_only")
+
     def test_persistence(self):
         anchor1 = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
         parsed = MarkdownParser.parse_file(self.plan_path)
@@ -118,7 +145,6 @@ class TestGitAnchoring(unittest.TestCase):
         anchor1.add_comment(line=parsed[0], comment_text="Test comment 1")
         self.assertEqual(len(anchor1.get_comments()), 1)
 
-        # Create new instance to test loading
         anchor2 = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
         self.assertEqual(len(anchor2.get_comments()), 1)
         self.assertEqual(anchor2.get_comments()[0].comment_text, "Test comment 1")

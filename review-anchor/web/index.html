@@ -14,16 +14,17 @@
         <span class="logo-icon">⚓</span>
         <span class="logo-text">Review Anchor</span>
         <span class="badge" id="planFilename">implementation_plan.md</span>
+        <span class="badge badge-git" id="gitBranchBadge">flash-3.8 → staging</span>
+        <span class="badge badge-tag" id="pendingTagBadge" title="pending-push tag">pending-push: ...</span>
       </div>
 
       <div class="controls-group">
         <label class="control-item">
-          <span>Font Size: <strong id="fontSizeVal">14px</strong></span>
+          <span>Font: <strong id="fontSizeVal">14px</strong></span>
           <input type="range" id="fontSizeSlider" min="10" max="22" value="14" step="1">
         </label>
 
         <label class="control-item">
-          <span>Font:</span>
           <select id="fontSelect">
             <option value="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">SF Pro / System</option>
             <option value="'JetBrains Mono', 'Fira Code', Menlo, monospace">JetBrains Mono / Menlo</option>
@@ -32,10 +33,11 @@
         </label>
 
         <div class="search-box">
-          <input type="text" id="searchInput" placeholder="Paste snippet to search & jump...">
+          <input type="text" id="searchInput" placeholder="Search & jump...">
           <button id="searchBtn" title="Search">🔍</button>
         </div>
 
+        <button class="btn btn-secondary btn-sm" id="tagPendingBtn" title="Tag current HEAD as pending-push">🏷️ Tag pending-push</button>
         <button class="btn btn-primary" id="copyCommitBtn">📋 Copy Git Commit</button>
       </div>
     </header>
@@ -49,7 +51,6 @@
           <span class="pane-subtitle" id="lineCountLabel">0 lines</span>
         </div>
         <div class="doc-viewport" id="docViewport">
-          <!-- Rendered document lines -->
           <div id="docContent"></div>
         </div>
       </section>
@@ -57,22 +58,46 @@
       <!-- Right Pane: Review Comments & Git Commit Formatter -->
       <section class="pane review-pane">
         <div class="pane-header">
-          <h2>Git Commit Review Anchors</h2>
-          <span class="tag-status" id="commitSchemeBadge">Backwards-Compatible Scheme</span>
+          <h2>Git Commit & Review Anchors</h2>
+          <span class="tag-status" id="commitSchemeBadge">Default: staging</span>
         </div>
 
         <div class="review-scroll-container">
-          <!-- Model Subject Line (Backwards compatible with user's git commit scheme) -->
-          <div class="form-group">
-            <label for="commitSubject">Commit Header / Model:</label>
-            <input type="text" id="commitSubject" value="gemini 3.8 flash high">
-            <small class="helper-text">Matches your repository's existing commit scheme.</small>
+          <!-- Commit Mode Selector (UX for pending-push style) -->
+          <div class="mode-selector-card">
+            <div class="mode-title">Commit Message Format:</div>
+            <div class="mode-options">
+              <label class="mode-radio">
+                <input type="radio" name="commitMode" value="model_only" id="modeModelOnly" checked>
+                <span><strong>Model Name Only</strong> (as in <code>pending-push</code>)</span>
+              </label>
+              <label class="mode-radio">
+                <input type="radio" name="commitMode" value="detailed" id="modeDetailed">
+                <span><strong>Detailed Review</strong> (Model + Prompt + Anchors)</span>
+              </label>
+            </div>
+            <small class="helper-text" id="modeExplanation">
+              Commit message will be strictly the model name. Review anchors are attached via Git Notes.
+            </small>
           </div>
 
-          <!-- General prompt / instructions -->
+          <!-- Model Subject Line -->
           <div class="form-group">
+            <div class="label-with-presets">
+              <label for="commitSubject">Configurable Model Name:</label>
+              <div class="preset-chips">
+                <button type="button" class="chip" data-model="gemini 3.8 flash high">gemini 3.8 flash high</button>
+                <button type="button" class="chip" data-model="gemini 1.5 pro">gemini 1.5 pro</button>
+                <button type="button" class="chip" data-model="claude-3-5-sonnet">claude 3.5</button>
+              </div>
+            </div>
+            <input type="text" id="commitSubject" value="gemini 3.8 flash high">
+          </div>
+
+          <!-- General prompt / instructions (active in detailed mode) -->
+          <div class="form-group" id="promptGroup">
             <label for="generalPrompt">Review Instructions / Prompt Text:</label>
-            <textarea id="generalPrompt" rows="3" placeholder="Paste or type overall review guidance, prompt modifications, or approval notes..."></textarea>
+            <textarea id="generalPrompt" rows="2" placeholder="Overall review guidance or approval notes..."></textarea>
           </div>
 
           <!-- Anchored comments list -->
@@ -89,8 +114,12 @@
           <!-- Generated Git Commit Message Preview -->
           <div class="commit-preview-section">
             <div class="preview-header">
-              <h3>Generated Git Commit Message</h3>
-              <button class="btn btn-sm" id="copyPreviewBtn">Copy</button>
+              <h3>Commit Message Preview</h3>
+              <div class="action-buttons-row">
+                <button class="btn btn-sm" id="copyPreviewBtn">Copy</button>
+                <button class="btn btn-sm btn-primary" id="commitBtn">Commit</button>
+                <button class="btn btn-sm btn-primary" id="commitAndTagBtn">Commit & Tag pending-push</button>
+              </div>
             </div>
             <pre class="commit-preview-box" id="commitPreviewBox"></pre>
           </div>

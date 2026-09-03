@@ -1,6 +1,7 @@
 """
 Zero-dependency local HTTP server for Review Anchor Web GUI.
-Serves static assets and provides REST API for plan data and comment persistence.
+Serves static assets and provides REST API for plan data, git status,
+pending-push tag management, and comment persistence.
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -50,10 +51,17 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                     for l in parsed
                 ]
 
+            tag_hash, is_at_tag = git_anchor.get_pending_push_info()
+
             data = {
                 "filename": os.path.basename(self.plan_path),
                 "model_header": git_anchor.model_header,
+                "commit_mode": git_anchor.commit_mode,
                 "author": git_anchor.author_name,
+                "branch": git_anchor.get_current_branch(),
+                "default_branch": git_anchor.get_default_branch(),
+                "pending_push_hash": tag_hash,
+                "is_at_pending_push": is_at_tag,
                 "lines": lines
             }
             self.wfile.write(json.dumps(data).encode("utf-8"))
@@ -92,7 +100,6 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
                 git_anchor.comments.clear()
                 
-                # Re-populate
                 for item in comments_list:
                     mline = MarkdownLine(
                         line_number=item["line_number"],
@@ -110,6 +117,59 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(b'{"status": "ok"}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+
+        elif self.path == "/api/config":
+            try:
+                body = json.loads(post_data)
+                git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
+                if "model_name" in body:
+                    git_anchor.model_header = body["model_name"]
+                if "commit_mode" in body:
+                    git_anchor.commit_mode = body["commit_mode"]
+                git_anchor.save_config()
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status": "ok"}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+
+        elif self.path == "/api/tag-pending":
+            try:
+                git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
+                ok, msg = git_anchor.tag_pending_push("HEAD")
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": ok, "message": msg}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+
+        elif self.path == "/api/commit":
+            try:
+                body = json.loads(post_data) if post_data else {}
+                git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
+                mode = body.get("mode", git_anchor.commit_mode)
+                tag_pending = body.get("tag_pending", False)
+                prompt = body.get("prompt", None)
+
+                ok, msg = git_anchor.execute_commit(general_prompt=prompt, mode=mode, tag_pending=tag_pending)
+                self.send_response(200 if ok else 400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": ok, "message": msg}).encode("utf-8"))
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()

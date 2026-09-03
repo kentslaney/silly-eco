@@ -2,15 +2,23 @@
 
 A WYSIWYG review comment anchoring tool and git commit generator built for the `silly-eco` monorepo.
 
-Review Anchor allows you to inspect implementation plans side-by-side with the Antigravity IDE, anchor comments to specific lines and sections, and generate git commit messages that are **100% backwards-compatible** with your existing commit scheme.
+Review Anchor allows you to inspect implementation plans side-by-side with the Antigravity IDE, anchor comments to specific lines and sections, and generate git commit messages that match your repository's workflow:
+- **`pending-push` Tag & Staging Branch Integration**: Tracks `refs/heads/staging` (GitHub default branch) and the `pending-push` tag.
+- **Model Name Only Mode**: Commit message is strictly the (configurable) model name (e.g. `gemini 3.8 flash high`), with review comments preserved in Git Notes.
+- **Detailed Mode**: Full commit body containing the review prompt, line quotes, section anchors, and RFC 822 trailers.
 
 ---
 
 ## Features
 
-- **Backwards-Compatible Commit Formatting**:
-  - Automatically matches your current scheme (`gemini 3.8 flash high\n\n<review/prompt>`).
-  - Appends machine-readable review anchors, line numbers, quoted snippets, and RFC 822 trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Reviewed-At`).
+- **Backwards-Compatible Commit Modes**:
+  - **Model Name Only (pending-push style)**: The commit message is literally just `<model_name>` (e.g. `gemini 3.8 flash high`). Line comments and metadata are recorded to Git Notes (`git notes add`) for posterity, keeping the git log clean.
+  - **Detailed Mode**: Subject line is the model name, followed by prompt notes, line references, snippets, and trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Reviewed-At`).
+- **Tag & Branch UX**:
+  - Automatically identifies current branch vs default target (`staging`).
+  - Displays `pending-push` tag status (commit hash and whether HEAD matches).
+  - Quick action to move/create `pending-push` tag (`git tag -f pending-push HEAD`).
+  - Quick action to **Commit & Tag pending-push** in one step.
 - **WYSIWYG Markdown Rendering**:
   - Line numbers gutter (`001`, `002`...).
   - Rendered GitHub alert callouts (`[!NOTE]`, `[!IMPORTANT]`, `[!TIP]`, `[!WARNING]`, `[!CAUTION]`).
@@ -32,11 +40,11 @@ Review Anchor allows you to inspect implementation plans side-by-side with the A
 ### 1. Terminal TUI Mode (Default)
 Run from the monorepo root:
 ```bash
-python3 review-anchor/review_anchor.py
+./review
 ```
 Or specify a plan file explicitly:
 ```bash
-python3 review-anchor/review_anchor.py path/to/implementation_plan.md
+./review path/to/implementation_plan.md
 ```
 
 #### Keybindings
@@ -48,10 +56,14 @@ python3 review-anchor/review_anchor.py path/to/implementation_plan.md
 | `c` / `Enter` | Add or edit comment for selected line (or paste from clipboard) |
 | `d` / `x` | Delete comment on selected line |
 | `p` | Paste from clipboard & jump to matching text in document |
-| `+` / `-` | Adjust column wrap width (match IDE font size) |
+| `m` | Configure model name (e.g. `gemini 3.8 flash high`) |
+| `t` | Toggle commit mode (`model_only` vs `detailed`) |
+| `+` / `-` | Adjust column wrap width (match IDE line breaks) |
 | `Tab` / `s` | Toggle side-by-side split pane |
 | `y` | Copy formatted git commit message to macOS clipboard |
-| `G` | Directly run `git commit -m ...` |
+| `G` | Run `git commit` |
+| `P` | **Commit AND tag `pending-push`** |
+| `T` | Tag current HEAD as `pending-push` |
 | `?` | Show help modal |
 | `q` / `Esc` | Quit |
 
@@ -60,27 +72,35 @@ python3 review-anchor/review_anchor.py path/to/implementation_plan.md
 ### 2. Side-by-Side Web GUI Mode
 Run with the `--gui` flag:
 ```bash
-python3 review-anchor/review_anchor.py --gui
+./review --gui
 ```
 This starts a lightweight local server at `http://127.0.0.1:8765` and opens your browser.
-- Adjust the **Font Size Slider** to visually match Antigravity IDE line wrapping.
-- Click any line in the document to open the comment dialog.
-- Click **Copy Git Commit** to copy the formatted message to your clipboard.
+- **Branch & Tag Badges**: View current branch, default branch (`staging`), and `pending-push` tag hash in the header.
+- **Format Toggle**: Choose between **Model Name Only** (as in `pending-push`) and **Detailed Review**.
+- **Model Preset Chips**: Click quick chips (`gemini 3.8 flash high`, `gemini 1.5 pro`, `claude 3.5`) or type a custom name.
+- **Actions**: Click **Tag pending-push**, **Commit**, or **Commit & Tag pending-push** directly from the UI.
 
 ---
 
-## Git Commit Format Example
+## Commit Format Examples
 
+### Mode 1: Model Name Only (Matching `pending-push`)
+```text
+gemini 3.8 flash high
+```
+*(Review anchors are attached to the commit object via Git Notes for posterity, viewable with `git log --show-notes`)*
+
+### Mode 2: Detailed Review
 ```text
 gemini 3.8 flash high
 
-User review feedback on implementation plan.
+Approved plan. Ensure 60mm diagonal corner lines match physical printer margins.
 
 Reviewed implementation_plan.md:
 
 [Line 16] Section: "User Review Required"
-> "The existing commit format in this repository follows:"
-Review: Approved format. Backwards compatibility verified.
+> "> **Git Commit Message Format Compatibility**:"
+Review: Verified format compatibility with git log.
 
 Review-Doc: implementation_plan.md
 Review-Anchor: #user-review-required

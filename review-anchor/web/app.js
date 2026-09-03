@@ -4,12 +4,15 @@ let documentLines = [];
 let reviewComments = [];
 let activeLineForComment = null;
 let currentPlanFilename = "implementation_plan.md";
+let activeCommitMode = "model_only";
 
 // DOM Elements
 const docContent = document.getElementById("docContent");
 const docViewport = document.getElementById("docViewport");
 const lineCountLabel = document.getElementById("lineCountLabel");
 const planFilename = document.getElementById("planFilename");
+const gitBranchBadge = document.getElementById("gitBranchBadge");
+const pendingTagBadge = document.getElementById("pendingTagBadge");
 const fontSizeSlider = document.getElementById("fontSizeSlider");
 const fontSizeVal = document.getElementById("fontSizeVal");
 const fontSelect = document.getElementById("fontSelect");
@@ -22,7 +25,16 @@ const commentCount = document.getElementById("commentCount");
 const commitPreviewBox = document.getElementById("commitPreviewBox");
 const copyCommitBtn = document.getElementById("copyCommitBtn");
 const copyPreviewBtn = document.getElementById("copyPreviewBtn");
+const commitBtn = document.getElementById("commitBtn");
+const commitAndTagBtn = document.getElementById("commitAndTagBtn");
+const tagPendingBtn = document.getElementById("tagPendingBtn");
 const clearCommentsBtn = document.getElementById("clearCommentsBtn");
+
+// Mode radios
+const modeModelOnly = document.getElementById("modeModelOnly");
+const modeDetailed = document.getElementById("modeDetailed");
+const modeExplanation = document.getElementById("modeExplanation");
+const promptGroup = document.getElementById("promptGroup");
 
 // Modal Elements
 const commentDialog = document.getElementById("commentDialog");
@@ -51,6 +63,19 @@ function setupEventListeners() {
     document.documentElement.style.setProperty("--doc-font-family", e.target.value);
   });
 
+  // Mode Radios
+  modeModelOnly.addEventListener("change", () => setCommitMode("model_only"));
+  modeDetailed.addEventListener("change", () => setCommitMode("detailed"));
+
+  // Preset Chips
+  document.querySelectorAll(".chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      commitSubject.value = chip.dataset.model;
+      syncConfig();
+      updateCommitPreview();
+    });
+  });
+
   // Search & Jump
   searchBtn.addEventListener("click", handleSearch);
   searchInput.addEventListener("keydown", (e) => {
@@ -58,12 +83,20 @@ function setupEventListeners() {
   });
 
   // Commit text inputs
-  commitSubject.addEventListener("input", updateCommitPreview);
+  commitSubject.addEventListener("input", () => {
+    syncConfig();
+    updateCommitPreview();
+  });
   generalPrompt.addEventListener("input", updateCommitPreview);
 
   // Copy Buttons
   copyCommitBtn.addEventListener("click", copyCommitMessage);
   copyPreviewBtn.addEventListener("click", copyCommitMessage);
+
+  // Git Actions
+  tagPendingBtn.addEventListener("click", handleTagPending);
+  commitBtn.addEventListener("click", () => handleCommit(false));
+  commitAndTagBtn.addEventListener("click", () => handleCommit(true));
 
   // Clear Comments
   clearCommentsBtn.addEventListener("click", async () => {
@@ -81,6 +114,19 @@ function setupEventListeners() {
   modalSaveBtn.addEventListener("click", handleSaveComment);
 }
 
+function setCommitMode(mode) {
+  activeCommitMode = mode;
+  if (mode === "model_only") {
+    modeModelOnly.checked = true;
+    modeExplanation.textContent = "Commit message will be strictly the model name. Review anchors are attached via Git Notes.";
+  } else {
+    modeDetailed.checked = true;
+    modeExplanation.textContent = "Commit message includes model name, user review prompt, line quotes, and RFC 822 review trailers.";
+  }
+  syncConfig();
+  updateCommitPreview();
+}
+
 async function loadData() {
   try {
     const res = await fetch("/api/plan");
@@ -94,6 +140,20 @@ async function loadData() {
       commitSubject.value = data.model_header;
     }
 
+    if (data.commit_mode) {
+      setCommitMode(data.commit_mode);
+    }
+
+    // Update Git Status Badges
+    const branchText = `${data.branch || 'unknown'} → ${data.default_branch || 'staging'}`;
+    gitBranchBadge.textContent = branchText;
+
+    if (data.pending_push_hash) {
+      pendingTagBadge.textContent = `pending-push: ${data.pending_push_hash}${data.is_at_pending_push ? ' ✓' : ''}`;
+    } else {
+      pendingTagBadge.textContent = "pending-push: (none)";
+    }
+
     const commRes = await fetch("/api/comments");
     reviewComments = await commRes.json();
 
@@ -105,9 +165,23 @@ async function loadData() {
   }
 }
 
+async function syncConfig() {
+  try {
+    await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model_name: commitSubject.value.trim(),
+        commit_mode: activeCommitMode
+      })
+    });
+  } catch (err) {
+    console.error("Failed to sync config:", err);
+  }
+}
+
 function renderDocument() {
   docContent.innerHTML = "";
-  
   const commentedLineNumbers = new Set(reviewComments.map(c => c.line_number));
 
   documentLines.forEach((item, idx) => {
@@ -120,16 +194,13 @@ function renderDocument() {
       lineEl.classList.add("has-comment");
     }
 
-    // Gutter
     const gutter = document.createElement("div");
     gutter.className = "line-gutter";
     gutter.textContent = String(item.line_number).padStart(3, "0");
 
-    // Content
     const content = document.createElement("div");
     content.className = "line-content";
 
-    // Style according to line type
     if (item.line_type === "heading") {
       lineEl.classList.add(`line-h${item.heading_level}`);
       content.textContent = item.raw_text;
@@ -149,7 +220,6 @@ function renderDocument() {
       content.textContent = item.raw_text || "\u00A0";
     }
 
-    // Comment indicator pill
     if (commentedLineNumbers.has(item.line_number)) {
       const count = reviewComments.filter(c => c.line_number === item.line_number).length;
       const pill = document.createElement("span");
@@ -160,9 +230,7 @@ function renderDocument() {
 
     lineEl.appendChild(gutter);
     lineEl.appendChild(content);
-
     lineEl.addEventListener("click", () => openCommentModal(item));
-
     docContent.appendChild(lineEl);
   });
 }
@@ -183,7 +251,6 @@ async function handleSaveComment() {
     return;
   }
 
-  // Find section
   let secName = "";
   let secSlug = "";
   for (let i = activeLineForComment.line_number - 1; i >= 0; i--) {
@@ -265,7 +332,6 @@ function renderComments() {
     if (c.line_text) card.appendChild(snippet);
     card.appendChild(text);
 
-    // Clicking card jumps to line
     card.addEventListener("click", () => {
       const lineEl = docContent.querySelector(`[data-line-num="${c.line_number}"]`);
       if (lineEl) {
@@ -280,9 +346,20 @@ function renderComments() {
 }
 
 function updateCommitPreview() {
-  const subject = commitSubject.value.trim() || "gemini 3.8 flash high";
-  const prompt = generalPrompt.value.trim();
+  const modelName = commitSubject.value.trim() || "gemini 3.8 flash high";
 
+  if (activeCommitMode === "model_only") {
+    // Exact match to pending-push tag: JUST the configurable model name!
+    let preview = modelName;
+    if (reviewComments.length > 0) {
+      preview += `\n\n# Note: ${reviewComments.length} review anchor(s) will be recorded to Git Notes (keeping commit message clean).`;
+    }
+    commitPreviewBox.textContent = preview;
+    return;
+  }
+
+  // Detailed mode
+  const prompt = generalPrompt.value.trim();
   let bodyBlocks = [];
   if (prompt) {
     bodyBlocks.push(prompt);
@@ -300,7 +377,6 @@ function updateCommitPreview() {
 
     bodyBlocks.push(entries.join("\n\n"));
 
-    // Trailers
     const trailers = [];
     trailers.push(`Review-Doc: ${currentPlanFilename}`);
     const primarySlug = reviewComments[0].section_slug || `L${reviewComments[0].line_number}`;
@@ -310,8 +386,8 @@ function updateCommitPreview() {
   }
 
   const fullMsg = bodyBlocks.length > 0
-    ? `${subject}\n\n${bodyBlocks.join("\n\n")}`
-    : subject;
+    ? `${modelName}\n\n${bodyBlocks.join("\n\n")}`
+    : modelName;
 
   commitPreviewBox.textContent = fullMsg;
 }
@@ -320,12 +396,9 @@ function handleSearch() {
   const query = searchInput.value.trim().toLowerCase();
   if (!query) return;
 
-  // Clear previous highlights
   docContent.querySelectorAll(".highlight-match").forEach(el => el.classList.remove("highlight-match"));
-
   let matchedLineEl = null;
 
-  // Check if query is line number
   if (/^\d+$/.test(query)) {
     matchedLineEl = docContent.querySelector(`[data-line-num="${query}"]`);
   } else {
@@ -347,11 +420,13 @@ function handleSearch() {
 }
 
 async function copyCommitMessage() {
-  const text = commitPreviewBox.textContent;
+  const modelName = commitSubject.value.trim() || "gemini 3.8 flash high";
+  const textToCopy = (activeCommitMode === "model_only") ? modelName : commitPreviewBox.textContent;
+
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(textToCopy);
     const origText = copyCommitBtn.textContent;
-    copyCommitBtn.textContent = "✓ Copied to Clipboard!";
+    copyCommitBtn.textContent = "✓ Copied!";
     copyPreviewBtn.textContent = "✓ Copied!";
     setTimeout(() => {
       copyCommitBtn.textContent = origText;
@@ -359,6 +434,43 @@ async function copyCommitMessage() {
     }, 2000);
   } catch (err) {
     alert("Could not copy to clipboard: " + err);
+  }
+}
+
+async function handleTagPending() {
+  try {
+    const res = await fetch("/api/tag-pending", { method: "POST" });
+    const data = await res.json();
+    alert(data.message || "Tagged pending-push!");
+    await loadData();
+  } catch (err) {
+    alert("Tagging failed: " + err);
+  }
+}
+
+async function handleCommit(tagPending) {
+  const modelName = commitSubject.value.trim() || "gemini 3.8 flash high";
+  const confirmMsg = tagPending
+    ? `Create commit with message "${modelName}" and tag as pending-push?`
+    : `Create commit with message "${modelName}"?`;
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const res = await fetch("/api/commit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: activeCommitMode,
+        tag_pending: tagPending,
+        prompt: generalPrompt.value.trim()
+      })
+    });
+    const data = await res.json();
+    alert(data.message || "Commit completed!");
+    await loadData();
+  } catch (err) {
+    alert("Commit failed: " + err);
   }
 }
 

@@ -1,7 +1,7 @@
 """
 Interactive Curses TUI Application for Review Anchoring.
 Provides side-by-side WYSIWYG markdown viewing, line-by-line comment anchoring,
-and generation of backwards-compatible git commit messages.
+configurable model names, and backwards-compatible git commit & 'pending-push' tag management.
 """
 
 import curses
@@ -22,11 +22,11 @@ class ReviewAnchorTUI:
         self.git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
         
         # State
-        self.selected_line_idx = 0  # index in markdown_lines
+        self.selected_line_idx = 0
         self.scroll_offset = 0
-        self.wrap_width = 80  # Default column width for side-by-side matching
+        self.wrap_width = 80
         self.show_split_pane = True
-        self.status_message = "Press 'c' to comment, 'p' to paste/search, 'y' to copy commit, '?' for help."
+        self.status_message = "Press 'c' to comment, 'm' for model, 't' toggle mode, 'P' commit & tag pending-push"
         
         self.load_file()
 
@@ -39,7 +39,6 @@ class ReviewAnchorTUI:
             ]
 
     def _get_current_section(self) -> Tuple[str, str]:
-        """Find the nearest preceding heading."""
         if not self.markdown_lines:
             return "", ""
         current_idx = min(self.selected_line_idx, len(self.markdown_lines) - 1)
@@ -73,7 +72,7 @@ class ReviewAnchorTUI:
 
             # Determine split widths
             if self.show_split_pane and max_x >= 90:
-                doc_width = max(45, int(max_x * 0.58))
+                doc_width = max(45, int(max_x * 0.56))
                 right_width = max_x - doc_width - 1
             else:
                 doc_width = max_x
@@ -82,7 +81,7 @@ class ReviewAnchorTUI:
             # Render Document Pane
             self._render_document_pane(stdscr, max_y - 2, doc_width)
 
-            # Render Right Split (Comments & Commit Preview)
+            # Render Right Split
             if right_width > 0:
                 self._render_right_pane(stdscr, max_y - 2, doc_width + 1, right_width)
 
@@ -97,7 +96,7 @@ class ReviewAnchorTUI:
                 break
 
             # Handle Keypresses
-            if key in (ord('q'), 27):  # 'q' or ESC
+            if key in (ord('q'), 27):
                 break
             elif key in (curses.KEY_UP, ord('k')):
                 if self.selected_line_idx > 0:
@@ -110,23 +109,22 @@ class ReviewAnchorTUI:
                     visible_height = max_y - 4
                     if self.selected_line_idx >= self.scroll_offset + visible_height:
                         self.scroll_offset += 1
-            elif key == curses.KEY_PPAGE:  # Page Up
+            elif key == curses.KEY_PPAGE:
                 step = max(1, max_y - 4)
                 self.selected_line_idx = max(0, self.selected_line_idx - step)
                 self.scroll_offset = max(0, self.scroll_offset - step)
-            elif key == curses.KEY_NPAGE:  # Page Down
+            elif key == curses.KEY_NPAGE:
                 step = max(1, max_y - 4)
                 self.selected_line_idx = min(len(self.markdown_lines) - 1, self.selected_line_idx + step)
                 self.scroll_offset = min(max(0, len(self.markdown_lines) - step), self.scroll_offset + step)
-            elif key == ord('+') or key == ord('='):
+            elif key in (ord('+'), ord('=')):
                 self.wrap_width = min(140, self.wrap_width + 5)
-                self.status_message = f"Adjusted wrap width to {self.wrap_width} cols (side-by-side zoom)"
-            elif key == ord('-') or key == ord('_'):
+                self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
+            elif key in (ord('-'), ord('_')):
                 self.wrap_width = max(40, self.wrap_width - 5)
-                self.status_message = f"Adjusted wrap width to {self.wrap_width} cols (side-by-side zoom)"
+                self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
             elif key in (ord('\t'), ord('s')):
                 self.show_split_pane = not self.show_split_pane
-                self.status_message = "Toggled split pane."
             elif key in (ord('c'), ord('\n'), 10, 13):
                 self._handle_add_comment(stdscr)
             elif key in (ord('d'), ord('x')):
@@ -135,22 +133,41 @@ class ReviewAnchorTUI:
                 self.status_message = f"Cleared comments on line {curr_line}."
             elif key == ord('p'):
                 self._handle_paste_search(stdscr)
+            elif key == ord('m'):
+                self._handle_configure_model(stdscr)
+            elif key == ord('t'):
+                self.git_anchor.commit_mode = "detailed" if self.git_anchor.commit_mode == "model_only" else "model_only"
+                self.git_anchor.save_config()
+                mode_desc = "Model Name Only (pending-push)" if self.git_anchor.commit_mode == "model_only" else "Detailed with Trailers"
+                self.status_message = f"Switched commit mode to: {mode_desc}"
             elif key in (ord('y'), ord('Y')):
                 msg = self.git_anchor.format_commit_message()
                 if Clipboard.set_text(msg):
-                    self.status_message = "✓ Copied formatted git commit message to macOS clipboard!"
+                    self.status_message = f"✓ Copied commit message [{self.git_anchor.commit_mode}] to macOS clipboard!"
                 else:
                     self.status_message = "Failed to copy to clipboard."
             elif key in (ord('g'), ord('G')):
-                self._handle_git_commit(stdscr)
+                self._handle_git_commit(stdscr, tag_pending=False)
+            elif key in (ord('P'),):  # Shift-P: Commit and Tag pending-push
+                self._handle_git_commit(stdscr, tag_pending=True)
+            elif key in (ord('T'),):  # Shift-T: Tag current HEAD as pending-push
+                ok, msg = self.git_anchor.tag_pending_push("HEAD")
+                self.status_message = msg
             elif key == ord('?'):
                 self._show_help_dialog(stdscr)
 
     def _render_document_pane(self, stdscr, max_y: int, width: int):
         cur_line_num = self.markdown_lines[self.selected_line_idx].line_number if self.markdown_lines else 1
         sec_name, _ = self._get_current_section()
+        curr_branch = self.git_anchor.get_current_branch()
+        def_branch = self.git_anchor.get_default_branch()
+        tag_hash, is_at_tag = self.git_anchor.get_pending_push_info()
 
-        header = f" PLAN: {os.path.basename(self.plan_path)} | Line {cur_line_num}/{len(self.markdown_lines)} | {sec_name[:30]} "
+        tag_str = f"tag:{tag_hash}" if tag_hash else "no tag"
+        if is_at_tag:
+            tag_str += "✓"
+
+        header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} | {tag_str} "
         stdscr.addstr(0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
         row_y = 1
@@ -180,12 +197,11 @@ class ReviewAnchorTUI:
                 row_y += 1
 
     def _render_right_pane(self, stdscr, max_y: int, start_x: int, width: int):
-        # Draw vertical separator
         for y in range(max_y):
             stdscr.addstr(y, start_x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
 
-        # Title
-        title = " REVIEW ANCHORS & COMMIT PREVIEW "
+        mode_badge = "[MODEL-ONLY: pending-push]" if self.git_anchor.commit_mode == "model_only" else "[DETAILED + NOTES]"
+        title = f" COMMIT & REVIEW ({mode_badge}) "
         stdscr.addstr(0, start_x, title.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
         commit_msg = self.git_anchor.format_commit_message()
@@ -193,9 +209,8 @@ class ReviewAnchorTUI:
 
         row_y = 1
         for line in lines:
-            if row_y >= max_y:
+            if row_y >= max_y - 4:
                 break
-            # Highlight headers and anchor trailers
             if line.startswith("gemini") or line.startswith("Review-"):
                 attr = curses.color_pair(WysiwygRenderer.COLOR_HEADING1) | curses.A_BOLD
             elif line.startswith("[Line"):
@@ -208,15 +223,23 @@ class ReviewAnchorTUI:
             stdscr.addstr(row_y, start_x, line.ljust(width)[:width], attr)
             row_y += 1
 
+        # Show Git Notes preview if in model_only mode and comments exist
+        if self.git_anchor.commit_mode == "model_only" and self.git_anchor.comments:
+            notes_hdr = "── Git Notes (Attached to Commit) ──"
+            stdscr.addstr(row_y, start_x, notes_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER))
+            row_y += 1
+            for n_line in self.git_anchor.format_review_body().splitlines():
+                if row_y >= max_y:
+                    break
+                stdscr.addstr(row_y, start_x, n_line.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_GUTTER))
+                row_y += 1
+
     def _render_status_bar(self, stdscr, y: int, width: int):
         bar = f" {self.status_message} "
         stdscr.addstr(y, 0, bar.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR))
 
-    def _handle_add_comment(self, stdscr):
-        curr_line = self.markdown_lines[self.selected_line_idx]
-        sec_name, sec_slug = self._get_current_section()
-
-        prompt_str = f"Enter comment for Line {curr_line.line_number} (or press Enter to paste): "
+    def _handle_configure_model(self, stdscr):
+        prompt_str = f"Set Model Name (current: '{self.git_anchor.model_header}'): "
         curses.echo()
         curses.curs_set(1)
 
@@ -232,7 +255,33 @@ class ReviewAnchorTUI:
             curses.noecho()
             curses.curs_set(0)
 
-        # If user pressed enter with empty string, check if clipboard has text
+        if inp:
+            self.git_anchor.model_header = inp
+            self.git_anchor.save_config()
+            self.status_message = f"✓ Configured model name: '{inp}'"
+        else:
+            self.status_message = "Model name unchanged."
+
+    def _handle_add_comment(self, stdscr):
+        curr_line = self.markdown_lines[self.selected_line_idx]
+        sec_name, sec_slug = self._get_current_section()
+
+        prompt_str = f"Comment for L{curr_line.line_number} (Enter to paste clipboard): "
+        curses.echo()
+        curses.curs_set(1)
+
+        max_y, max_x = stdscr.getmaxyx()
+        stdscr.addstr(max_y - 1, 0, " " * max_x)
+        stdscr.addstr(max_y - 1, 0, prompt_str[:max_x - 1], curses.A_BOLD)
+
+        try:
+            inp = stdscr.getstr(max_y - 1, min(len(prompt_str), max_x - 5)).decode("utf-8").strip()
+        except Exception:
+            inp = ""
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
+
         if not inp:
             clip = Clipboard.get_text().strip()
             if clip:
@@ -245,7 +294,7 @@ class ReviewAnchorTUI:
                 section_name=sec_name,
                 section_slug=sec_slug
             )
-            self.status_message = f"✓ Added review comment to Line {curr_line.line_number}!"
+            self.status_message = f"✓ Added comment to Line {curr_line.line_number}!"
         else:
             self.status_message = "Comment cancelled."
 
@@ -255,11 +304,9 @@ class ReviewAnchorTUI:
             self.status_message = "Clipboard is empty."
             return
 
-        # Try to find snippet or line number
         target_line = None
         cleaned_clip = clip.lower()
 
-        # Check if clipboard starts with Line number
         if clip.isdigit():
             target_num = int(clip)
             for idx, mline in enumerate(self.markdown_lines):
@@ -275,42 +322,30 @@ class ReviewAnchorTUI:
         if target_line is not None:
             self.selected_line_idx = target_line
             self.scroll_offset = max(0, target_line - 3)
-            self.status_message = f"Jumped to line matching clipboard: '{clip[:30]}...'"
+            self.status_message = f"Jumped to line matching: '{clip[:25]}...'"
         else:
-            self.status_message = f"No match found for: '{clip[:30]}...'"
+            self.status_message = f"No match for: '{clip[:25]}...'"
 
-    def _handle_git_commit(self, stdscr):
+    def _handle_git_commit(self, stdscr, tag_pending: bool = False):
         msg = self.git_anchor.format_commit_message()
-        max_y, max_x = stdscr.getmaxyx()
-        confirm_str = "Run 'git commit' with this review message? (y/n): "
+        action_label = "Commit & Tag pending-push" if tag_pending else "Commit"
+        confirm_str = f"{action_label} with message '{msg[:30]}' (mode: {self.git_anchor.commit_mode})? (y/n): "
 
+        max_y, max_x = stdscr.getmaxyx()
         stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, confirm_str, curses.A_BOLD)
+        stdscr.addstr(max_y - 1, 0, confirm_str[:max_x - 1], curses.A_BOLD)
         ch = stdscr.getch()
 
         if ch in (ord('y'), ord('Y')):
-            try:
-                res = subprocess.run(
-                    ["git", "commit", "-m", msg],
-                    cwd=self.repo_root,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False
-                )
-                if res.returncode == 0:
-                    self.status_message = "✓ Git commit created successfully!"
-                else:
-                    self.status_message = f"Git commit failed: {res.stderr.strip()[:60]}"
-            except Exception as e:
-                self.status_message = f"Commit error: {e}"
+            ok, result = self.git_anchor.execute_commit(tag_pending=tag_pending)
+            self.status_message = result
         else:
-            self.status_message = "Git commit cancelled."
+            self.status_message = "Cancelled."
 
     def _show_help_dialog(self, stdscr):
         max_y, max_x = stdscr.getmaxyx()
         help_lines = [
-            "  Review Anchor TUI - Help & Keybindings",
+            "  Review Anchor - Help & Keybindings",
             "──────────────────────────────────────────────",
             "  j / ↓         : Move down 1 line",
             "  k / ↑         : Move up 1 line",
@@ -318,10 +353,14 @@ class ReviewAnchorTUI:
             "  c / Enter     : Add/edit review comment for selected line",
             "  d / x         : Delete comment on selected line",
             "  p             : Paste from clipboard & jump to matching text",
-            "  + / -         : Adjust column wrap width (match IDE font size)",
+            "  m             : Configure model name (e.g. 'gemini 3.8 flash high')",
+            "  t             : Toggle commit mode ('model_only' vs 'detailed')",
+            "  + / -         : Adjust column wrap width (match IDE line breaks)",
             "  Tab / s       : Toggle side-by-side split pane",
-            "  y             : Copy formatted git commit message to clipboard",
-            "  G             : Create git commit with review message",
+            "  y             : Copy formatted commit message to clipboard",
+            "  G             : Run git commit",
+            "  P             : Commit AND tag 'pending-push'",
+            "  T             : Move 'pending-push' tag to current HEAD",
             "  ?             : Show this help window",
             "  q / Esc       : Quit",
             "",
