@@ -51,8 +51,6 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                     for l in parsed
                 ]
 
-            tag_hash, is_at_tag = git_anchor.get_pending_push_info()
-
             qa_items = [
                 {
                     "ref_id": q.ref_id,
@@ -73,8 +71,6 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 "author": git_anchor.author_name,
                 "branch": git_anchor.get_current_branch(),
                 "default_branch": git_anchor.get_default_branch(),
-                "pending_push_hash": tag_hash,
-                "is_at_pending_push": is_at_tag,
                 "lines": lines,
                 "qa_items": qa_items,
                 "git_notes_preview": git_anchor.format_git_notes()

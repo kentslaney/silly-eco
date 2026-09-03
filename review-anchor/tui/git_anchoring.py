@@ -77,21 +77,8 @@ class GitAnchoring:
         return os.getcwd()
 
     def _detect_commit_scheme(self) -> str:
-        """Detect model name from 'pending-push' tag or latest commits."""
+        """Detect model name from latest commits or fallback to DEFAULT_MODEL."""
         try:
-            # 1. Check pending-push commit message
-            res_tag = subprocess.run(
-                ["git", "log", "-n", "1", "--pretty=format:%s", "pending-push"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res_tag.returncode == 0 and res_tag.stdout.strip():
-                return res_tag.stdout.strip()
-
-            # 2. Check recent commit subjects
             res = subprocess.run(
                 ["git", "log", "-n", "5", "--pretty=format:%s"],
                 cwd=self.repo_root,
@@ -153,33 +140,6 @@ class GitAnchoring:
         except Exception:
             pass
         return self.DEFAULT_BRANCH
-
-    def get_pending_push_info(self) -> Tuple[Optional[str], bool]:
-        """Returns (pending_push_short_hash, is_head_equal_to_pending_push)."""
-        try:
-            res_tag = subprocess.run(
-                ["git", "rev-parse", "--short", "pending-push"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res_tag.returncode != 0:
-                return None, False
-
-            tag_hash = res_tag.stdout.strip()
-            res_head = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            head_hash = res_head.stdout.strip() if res_head.returncode == 0 else ""
-            return tag_hash, (tag_hash == head_hash)
-        except Exception:
-            return None, False
 
     # Diff -p Context Extraction
     def resolve_diff_p_context(self, file_path: str, line_num: int) -> Tuple[str, str]:

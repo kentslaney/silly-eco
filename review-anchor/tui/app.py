@@ -2,7 +2,8 @@
 Interactive Curses TUI Application for Review Anchoring.
 Provides side-by-side WYSIWYG markdown viewing, line-by-line comment anchoring,
 Claude Code Q/A context prompts, and backwards-compatible git commit & Git Notes management.
-Safe against curses bounds and multi-byte encoding errors on macOS / modern terminals.
+Full GNU less / vim compatible navigation (j/k/u/d/g/G), dynamic cursor-following scrolling,
+and crash-proof curses boundary protection on macOS and modern terminals.
 """
 
 import curses
@@ -27,7 +28,7 @@ class ReviewAnchorTUI:
         self.scroll_offset = 0
         self.wrap_width = 80
         self.show_split_pane = True
-        self.status_message = "Press 'c' to comment, 'a' for Claude Q/A, 'm' model, 't' mode, 'G' commit, '?' help"
+        self.status_message = "Nav: j/k/u/d/g/G | 'c' comment | 'a' Claude Q/A | 'C' commit | '?' help"
 
         self.load_file()
 
@@ -95,6 +96,48 @@ class ReviewAnchorTUI:
             except Exception:
                 pass
 
+    def _visual_line_count(self, idx: int, doc_width: int) -> int:
+        """Returns the number of terminal display rows a given markdown line occupies."""
+        if idx < 0 or idx >= len(self.markdown_lines):
+            return 1
+        mline = self.markdown_lines[idx]
+        has_comment = (mline.line_number in self.git_anchor.comments)
+        rows = WysiwygRenderer.format_line(
+            mline,
+            wrap_width=min(self.wrap_width, max(20, doc_width - 2)),
+            has_comment=has_comment,
+            is_selected=False
+        )
+        return max(1, len(rows))
+
+    def _ensure_cursor_visible(self, pane_height: int, doc_width: int):
+        """
+        Ensures that self.selected_line_idx is always within the visible viewport.
+        Dynamically accounts for variable-height wrapped lines, alerts, and code blocks.
+        """
+        if not self.markdown_lines:
+            self.selected_line_idx = 0
+            self.scroll_offset = 0
+            return
+
+        # 1. Clamp cursor index
+        self.selected_line_idx = max(0, min(self.selected_line_idx, len(self.markdown_lines) - 1))
+
+        # 2. If cursor is above viewport, pull scroll_offset up immediately
+        if self.selected_line_idx < self.scroll_offset:
+            self.scroll_offset = self.selected_line_idx
+            return
+
+        # 3. If cursor is below viewport, advance scroll_offset until selected_line_idx fits
+        avail_rows = max(1, pane_height)
+        rows_needed = 0
+        for i in range(self.scroll_offset, self.selected_line_idx + 1):
+            rows_needed += self._visual_line_count(i, doc_width)
+
+        while rows_needed > avail_rows and self.scroll_offset < self.selected_line_idx:
+            rows_needed -= self._visual_line_count(self.scroll_offset, doc_width)
+            self.scroll_offset += 1
+
     def _main_loop(self, stdscr):
         curses.curs_set(0)
         stdscr.clear()
@@ -121,7 +164,7 @@ class ReviewAnchorTUI:
                 doc_width = max_x
                 right_width = 0
 
-            # Render Document Pane
+            # Render Document Pane (pane_height = max_y - 2 for header and status bar)
             self._render_document_pane(stdscr, max_y - 2, doc_width)
 
             # Render Right Split
@@ -138,59 +181,108 @@ class ReviewAnchorTUI:
             except KeyboardInterrupt:
                 break
 
-            # Handle Keypresses
+            # ==========================================
+            # Handle Keypresses (GNU less / vim standard)
+            # ==========================================
             if key in (ord('q'), 27):
                 break
-            elif key in (curses.KEY_UP, ord('k')):
-                if self.selected_line_idx > 0:
-                    self.selected_line_idx -= 1
-                    if self.selected_line_idx < self.scroll_offset:
-                        self.scroll_offset = self.selected_line_idx
+
+            # Navigation: Line Down (j / Down Arrow)
             elif key in (curses.KEY_DOWN, ord('j')):
                 if self.selected_line_idx < len(self.markdown_lines) - 1:
                     self.selected_line_idx += 1
-                    visible_height = max_y - 4
-                    if self.selected_line_idx >= self.scroll_offset + visible_height:
-                        self.scroll_offset += 1
-            elif key == curses.KEY_PPAGE:
-                step = max(1, max_y - 4)
-                self.selected_line_idx = max(0, self.selected_line_idx - step)
-                self.scroll_offset = max(0, self.scroll_offset - step)
-            elif key == curses.KEY_NPAGE:
-                step = max(1, max_y - 4)
-                self.selected_line_idx = min(len(self.markdown_lines) - 1, self.selected_line_idx + step)
-                self.scroll_offset = min(max(0, len(self.markdown_lines) - step), self.scroll_offset + step)
+
+            # Navigation: Line Up (k / Up Arrow)
+            elif key in (curses.KEY_UP, ord('k')):
+                if self.selected_line_idx > 0:
+                    self.selected_line_idx -= 1
+
+            # Navigation: Top of Document (g in vim/less)
+            elif key == ord('g'):
+                self.selected_line_idx = 0
+                self.scroll_offset = 0
+                self.status_message = "Top of document (line 1)"
+
+            # Navigation: End of Document (G in vim/less)
+            elif key == ord('G'):
+                self.selected_line_idx = len(self.markdown_lines) - 1
+                self.status_message = f"End of document (line {len(self.markdown_lines)})"
+
+            # Navigation: Scroll Down Half Window (d / ^D in vim/less)
+            elif key in (ord('d'), 4):
+                half_screen = max(1, (max_y - 4) // 2)
+                self.selected_line_idx = min(len(self.markdown_lines) - 1, self.selected_line_idx + half_screen)
+                self.status_message = f"Scrolled down {half_screen} lines"
+
+            # Navigation: Scroll Up Half Window (u / ^U in vim/less)
+            elif key in (ord('u'), 21):
+                half_screen = max(1, (max_y - 4) // 2)
+                self.selected_line_idx = max(0, self.selected_line_idx - half_screen)
+                self.scroll_offset = max(0, self.scroll_offset - half_screen)
+                self.status_message = f"Scrolled up {half_screen} lines"
+
+            # Navigation: Page Down (f / Space / PgDn / ^F in less)
+            elif key in (curses.KEY_NPAGE, ord('f'), ord(' '), 6):
+                full_screen = max(1, max_y - 4)
+                self.selected_line_idx = min(len(self.markdown_lines) - 1, self.selected_line_idx + full_screen)
+
+            # Navigation: Page Up (b / PgUp / ^B in less)
+            elif key in (curses.KEY_PPAGE, ord('b'), 2):
+                full_screen = max(1, max_y - 4)
+                self.selected_line_idx = max(0, self.selected_line_idx - full_screen)
+                self.scroll_offset = max(0, self.scroll_offset - full_screen)
+
+            # Document Wrap Width adjustment
             elif key in (ord('+'), ord('=')):
                 self.wrap_width = min(140, self.wrap_width + 5)
                 self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
             elif key in (ord('-'), ord('_')):
                 self.wrap_width = max(40, self.wrap_width - 5)
                 self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
+
+            # Toggle Side-by-Side Split Pane
             elif key in (ord('\t'), ord('s')):
                 self.show_split_pane = not self.show_split_pane
+
+            # Claude Code Q/A Prompt
             elif key in (ord('a'), ord('A')):
                 self._handle_add_qa(stdscr)
+
+            # Review Comment: Add / Edit (c / Enter)
             elif key in (ord('c'), ord('\n'), 10, 13):
                 self._handle_add_comment(stdscr)
-            elif key in (ord('d'), ord('x')):
-                curr_line = self.markdown_lines[self.selected_line_idx].line_number
-                self.git_anchor.remove_comments_for_line(curr_line)
-                self.status_message = f"Cleared comments on line {curr_line}."
+
+            # Review Comment: Delete on line (x in vim)
+            elif key == ord('x'):
+                if self.markdown_lines:
+                    curr_line = self.markdown_lines[self.selected_line_idx].line_number
+                    self.git_anchor.remove_comments_for_line(curr_line)
+                    self.status_message = f"Cleared comments on line {curr_line}."
+
+            # Clipboard Search & Jump
             elif key == ord('p'):
                 self._handle_paste_search(stdscr)
+
+            # Configure Model Name
             elif key == ord('m'):
                 self._handle_configure_model(stdscr)
+
+            # Toggle Commit Mode (model_only vs detailed)
             elif key == ord('t'):
                 self.git_anchor.commit_mode = "detailed" if self.git_anchor.commit_mode == "model_only" else "model_only"
                 self.git_anchor.save_config()
-                mode_desc = "Model Name Only (pending-push)" if self.git_anchor.commit_mode == "model_only" else "Detailed with Trailers"
+                mode_desc = "Model Name Only (Minimal)" if self.git_anchor.commit_mode == "model_only" else "Detailed Review"
                 self.status_message = f"Switched commit mode to: {mode_desc}"
+
+            # Copy Formatted Commit Message to Clipboard
             elif key in (ord('y'), ord('Y')):
                 msg = self.git_anchor.format_commit_message()
                 if Clipboard.set_text(msg):
                     self.status_message = f"✓ Copied commit message [{self.git_anchor.commit_mode}] to macOS clipboard!"
                 else:
                     self.status_message = "Failed to copy to clipboard."
+
+            # Copy Git Notes (diff -p Context) to Clipboard
             elif key in (ord('n'), ord('N')):
                 notes = self.git_anchor.format_git_notes()
                 if notes and Clipboard.set_text(notes):
@@ -199,20 +291,25 @@ class ReviewAnchorTUI:
                     self.status_message = "No Git Notes to copy."
                 else:
                     self.status_message = "Failed to copy Git Notes."
-            elif key in (ord('g'), ord('G')):
+
+            # Create Git Commit (Capital C)
+            elif key == ord('C'):
                 self._handle_git_commit(stdscr)
+
+            # Show Help
             elif key == ord('?'):
                 self._show_help_dialog(stdscr)
 
     def _render_document_pane(self, stdscr, max_y: int, width: int):
+        # Dynamically guarantee cursor is visible in the viewport
+        pane_height = max(1, max_y - 1)
+        self._ensure_cursor_visible(pane_height, width)
+
         cur_line_num = self.markdown_lines[self.selected_line_idx].line_number if self.markdown_lines else 1
-        sec_name, _ = self._get_current_section()
         curr_branch = self.git_anchor.get_current_branch()
         def_branch = self.git_anchor.get_default_branch()
-        tag_hash, is_at_tag = self.git_anchor.get_pending_push_info()
 
-        bookmark_str = f"bookmark: {tag_hash}" if tag_hash else ""
-        header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} | {bookmark_str} "
+        header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} "
         self._safe_addstr(stdscr, 0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
         row_y = 1
@@ -228,7 +325,7 @@ class ReviewAnchorTUI:
 
             rendered_rows = WysiwygRenderer.format_line(
                 mline,
-                wrap_width=min(self.wrap_width, width - 2),
+                wrap_width=min(self.wrap_width, max(20, width - 2)),
                 has_comment=has_comment,
                 is_selected=is_selected,
                 ref_id=ref_id
@@ -249,7 +346,7 @@ class ReviewAnchorTUI:
         for y in range(max_y):
             self._safe_addstr(stdscr, y, start_x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
 
-        mode_badge = "[MODEL-ONLY: pending-push]" if self.git_anchor.commit_mode == "model_only" else "[MODEL INPUT + DIFF -P NOTES]"
+        mode_badge = "[MODEL-ONLY]" if self.git_anchor.commit_mode == "model_only" else "[MODEL INPUT + DIFF -P NOTES]"
         title = f" COMMIT & REVIEW ({mode_badge}) "
         self._safe_addstr(stdscr, 0, start_x, title.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
@@ -384,14 +481,13 @@ class ReviewAnchorTUI:
 
         if target_line is not None:
             self.selected_line_idx = target_line
-            self.scroll_offset = max(0, target_line - 3)
             self.status_message = f"Jumped to line matching: '{clip[:25]}...'"
         else:
             self.status_message = f"No match for: '{clip[:25]}...'"
 
     def _handle_git_commit(self, stdscr):
         msg = self.git_anchor.format_commit_message()
-        mode_desc = "Temporary / Model-Only" if self.git_anchor.commit_mode == "model_only" else "Detailed Review"
+        mode_desc = "Model-Only" if self.git_anchor.commit_mode == "model_only" else "Detailed Review"
         confirm_str = f"Create git commit [{mode_desc}] with message '{msg[:30]}'? (y/n): "
 
         max_y, max_x = stdscr.getmaxyx()
@@ -456,14 +552,19 @@ class ReviewAnchorTUI:
     def _show_help_dialog(self, stdscr):
         max_y, max_x = stdscr.getmaxyx()
         help_lines = [
-            "  Review Anchor - Help & Keybindings",
-            "──────────────────────────────────────────────",
+            "  Review Anchor - Help & Keybindings (vim / less)",
+            "───────────────────────────────────────────────────",
             "  j / ↓         : Move down 1 line",
             "  k / ↑         : Move up 1 line",
-            "  PgDn / PgUp   : Page down / Page up",
+            "  d / ^D        : Scroll down half screen (less)",
+            "  u / ^U        : Scroll up half screen (less)",
+            "  g             : Jump to top of document (line 1)",
+            "  G             : Jump to end of document",
+            "  f / Space     : Page down (PgDn)",
+            "  b             : Page up (PgUp)",
             "  a             : Add Claude Code Q/A item (prompt snapshot)",
             "  c / Enter     : Add/edit review comment for selected line",
-            "  d / x         : Delete comment on selected line",
+            "  x             : Delete comment on selected line",
             "  p             : Paste from clipboard & jump to matching text",
             "  m             : Configure model name (e.g. 'gemini 3.8 flash high')",
             "  t             : Toggle commit mode ('model_only' vs 'detailed')",
@@ -471,12 +572,9 @@ class ReviewAnchorTUI:
             "  Tab / s       : Toggle side-by-side split pane",
             "  y             : Copy formatted commit message to clipboard",
             "  n             : Copy Git Notes (diff -p context) to clipboard",
-            "  G             : Run git commit (attaches Git Notes automatically)",
+            "  C             : Create git commit & attach Git Notes",
             "  ?             : Show this help window",
             "  q / Esc       : Quit",
-            "",
-            "  Bookmark Note:",
-            "  'pending-push' is preserved as an immutable example bookmark.",
             "",
             "Press any key to close help."
         ]

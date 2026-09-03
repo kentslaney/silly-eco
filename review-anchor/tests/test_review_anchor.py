@@ -85,7 +85,7 @@ class TestGitAnchoring(unittest.TestCase):
         parsed = MarkdownParser.parse_file(self.plan_path)
         anchor.add_comment(line=parsed[0], comment_text="Test comment")
 
-        # In model_only mode (pending-push style), commit message is strictly the model name
+        # In model_only mode, commit message is strictly the model name
         msg = anchor.format_commit_message(general_prompt="Should be omitted in model_only")
         self.assertEqual(msg, "gemini 3.8 flash high")
 
@@ -231,6 +231,67 @@ class TestSafeCurses(unittest.TestCase):
         self.assertEqual(y, 23)
         self.assertEqual(x, 0)
         self.assertLess(x + len(text), 80)
+
+
+class TestCursorVisibilityAndScrolling(unittest.TestCase):
+    def test_scrolling_follows_cursor(self):
+        from tui.app import ReviewAnchorTUI
+        from tui.markdown_parser import MarkdownLine
+        tui = ReviewAnchorTUI(plan_path="implementation_plan.md")
+
+        tui.markdown_lines = [
+            MarkdownLine(line_number=i, raw_text=f"Line content {i}", line_type="text")
+            for i in range(1, 101)
+        ]
+        tui.selected_line_idx = 0
+        tui.scroll_offset = 0
+
+        # Move cursor to line 20 in a 10-row pane
+        tui.selected_line_idx = 20
+        tui._ensure_cursor_visible(pane_height=10, doc_width=80)
+
+        # scroll_offset must advance so line 20 is within visible rows
+        self.assertGreater(tui.scroll_offset, 0)
+        self.assertLessEqual(tui.scroll_offset, 20)
+        visible_count = sum(tui._visual_line_count(i, 80) for i in range(tui.scroll_offset, 21))
+        self.assertLessEqual(visible_count, 10)
+
+        # Jump to top ('g')
+        tui.selected_line_idx = 0
+        tui._ensure_cursor_visible(pane_height=10, doc_width=80)
+        self.assertEqual(tui.scroll_offset, 0)
+
+        # Jump to bottom ('G')
+        tui.selected_line_idx = 99
+        tui._ensure_cursor_visible(pane_height=10, doc_width=80)
+        self.assertGreater(tui.scroll_offset, 85)
+        visible_count_end = sum(tui._visual_line_count(i, 80) for i in range(tui.scroll_offset, 100))
+        self.assertLessEqual(visible_count_end, 10)
+
+    def test_less_navigation_half_page_scroll(self):
+        from tui.app import ReviewAnchorTUI
+        from tui.markdown_parser import MarkdownLine
+        tui = ReviewAnchorTUI(plan_path="implementation_plan.md")
+
+        tui.markdown_lines = [
+            MarkdownLine(line_number=i, raw_text=f"Line {i}", line_type="text")
+            for i in range(1, 51)
+        ]
+        tui.selected_line_idx = 0
+        tui.scroll_offset = 0
+
+        # Simulate 'd' (half page down in 20-row viewport -> step 8)
+        half_screen = (20 - 4) // 2
+        tui.selected_line_idx = min(len(tui.markdown_lines) - 1, tui.selected_line_idx + half_screen)
+        tui._ensure_cursor_visible(pane_height=18, doc_width=80)
+        self.assertEqual(tui.selected_line_idx, 8)
+
+        # Simulate 'u' (half page up -> step 8)
+        tui.selected_line_idx = max(0, tui.selected_line_idx - half_screen)
+        tui.scroll_offset = max(0, tui.scroll_offset - half_screen)
+        tui._ensure_cursor_visible(pane_height=18, doc_width=80)
+        self.assertEqual(tui.selected_line_idx, 0)
+        self.assertEqual(tui.scroll_offset, 0)
 
 
 if __name__ == "__main__":

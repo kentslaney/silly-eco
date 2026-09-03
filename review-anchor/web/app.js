@@ -13,7 +13,6 @@ const docViewport = document.getElementById("docViewport");
 const lineCountLabel = document.getElementById("lineCountLabel");
 const planFilename = document.getElementById("planFilename");
 const gitBranchBadge = document.getElementById("gitBranchBadge");
-const pendingTagBadge = document.getElementById("pendingTagBadge");
 const fontSizeSlider = document.getElementById("fontSizeSlider");
 const fontSizeVal = document.getElementById("fontSizeVal");
 const fontSelect = document.getElementById("fontSelect");
@@ -130,7 +129,7 @@ function setCommitMode(mode) {
   activeCommitMode = mode;
   if (mode === "model_only") {
     modeModelOnly.checked = true;
-    modeExplanation.textContent = "Commit message will be strictly the model name (as in pending-push). Review anchors attach to Git Notes.";
+    modeExplanation.textContent = "Commit message will be strictly the model name. Review anchors attach to Git Notes.";
   } else {
     modeDetailed.checked = true;
     modeExplanation.textContent = "Commit message includes snapshot of model input (prompt, Q/A, [Ref N] comments). Git Notes store diff -p anchors.";
@@ -160,12 +159,6 @@ async function loadData() {
     // Update Git Status Badges
     const branchText = `${data.branch || 'unknown'} → ${data.default_branch || 'staging'}`;
     gitBranchBadge.textContent = branchText;
-
-    if (data.pending_push_hash) {
-      pendingTagBadge.textContent = `Bookmark: pending-push (${data.pending_push_hash})`;
-    } else {
-      pendingTagBadge.textContent = "Bookmark: pending-push";
-    }
 
     const commRes = await fetch("/api/comments");
     reviewComments = await commRes.json();

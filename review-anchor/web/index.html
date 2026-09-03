@@ -15,7 +15,6 @@
         <span class="logo-text">Review Anchor</span>
         <span class="badge" id="planFilename">implementation_plan.md</span>
         <span class="badge badge-git" id="gitBranchBadge">flash-3.8 → staging</span>
-        <span class="badge badge-tag" id="pendingTagBadge" title="Reference bookmark for temporary commit example">Bookmark: pending-push</span>
       </div>
 
       <div class="controls-group">
@@ -62,16 +61,16 @@
         </div>
 
         <div class="review-scroll-container">
-          <!-- Commit Mode Selector (UX for pending-push style) -->
+          <!-- Commit Mode Selector -->
           <div class="mode-selector-card">
             <div class="mode-title">Commit Message Format:</div>
             <div class="mode-options">
               <label class="mode-radio">
-                <input type="radio" name="commitMode" value="model_only" id="modeModelOnly" checked>
-                <span><strong>Model Name Only</strong> (as in <code>pending-push</code>)</span>
+                <input type="radio" name="commitMode" value="model_only" id="modeModelOnly">
+                <span><strong>Model Name Only</strong> (Minimal subject header)</span>
               </label>
               <label class="mode-radio">
-                <input type="radio" name="commitMode" value="detailed" id="modeDetailed">
+                <input type="radio" name="commitMode" value="detailed" id="modeDetailed" checked>
                 <span><strong>Detailed Review</strong> (Model + Prompt + Anchors)</span>
               </label>
             </div>

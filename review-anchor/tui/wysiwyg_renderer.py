@@ -60,17 +60,25 @@ class WysiwygRenderer:
         curses.init_pair(cls.COLOR_BORDER, curses.COLOR_CYAN, -1)
 
     @classmethod
+    def get_color(cls, pair_id: int) -> int:
+        """Safely returns curses color pair, or 0 if curses is not initialized."""
+        try:
+            return curses.color_pair(pair_id)
+        except Exception:
+            return 0
+
+    @classmethod
     def get_alert_color(cls, alert_type: str) -> int:
         at = alert_type.upper()
         if at == "IMPORTANT":
-            return curses.color_pair(cls.COLOR_ALERT_IMPORTANT) | curses.A_BOLD
+            return cls.get_color(cls.COLOR_ALERT_IMPORTANT) | curses.A_BOLD
         elif at == "TIP":
-            return curses.color_pair(cls.COLOR_ALERT_TIP) | curses.A_BOLD
+            return cls.get_color(cls.COLOR_ALERT_TIP) | curses.A_BOLD
         elif at == "WARNING":
-            return curses.color_pair(cls.COLOR_ALERT_WARN) | curses.A_BOLD
+            return cls.get_color(cls.COLOR_ALERT_WARN) | curses.A_BOLD
         elif at == "CAUTION":
-            return curses.color_pair(cls.COLOR_ALERT_CAUTION) | curses.A_BOLD
-        return curses.color_pair(cls.COLOR_ALERT_NOTE) | curses.A_BOLD
+            return cls.get_color(cls.COLOR_ALERT_CAUTION) | curses.A_BOLD
+        return cls.get_color(cls.COLOR_ALERT_NOTE) | curses.A_BOLD
 
     @classmethod
     def format_line(
@@ -97,13 +105,13 @@ class WysiwygRenderer:
         if line.line_type == "heading":
             if line.heading_level == 1:
                 title = f"# {raw.lstrip('#').strip()}" + comment_tag
-                attr = curses.color_pair(cls.COLOR_HEADING1) | curses.A_BOLD | curses.A_UNDERLINE
+                attr = cls.get_color(cls.COLOR_HEADING1) | curses.A_BOLD | curses.A_UNDERLINE
             elif line.heading_level == 2:
                 title = f"## {raw.lstrip('#').strip()}" + comment_tag
-                attr = curses.color_pair(cls.COLOR_HEADING2) | curses.A_BOLD
+                attr = cls.get_color(cls.COLOR_HEADING2) | curses.A_BOLD
             else:
                 title = f"### {raw.lstrip('#').strip()}" + comment_tag
-                attr = curses.color_pair(cls.COLOR_HEADING3) | curses.A_BOLD
+                attr = cls.get_color(cls.COLOR_HEADING3) | curses.A_BOLD
             
             wrapped = textwrap.wrap(title, width=content_width) or [""]
             for i, w in enumerate(wrapped):
@@ -120,21 +128,21 @@ class WysiwygRenderer:
                 rows.append((g + w, attr, line.line_number))
 
         elif line.line_type in ("code_fence", "code_body"):
-            attr = curses.color_pair(cls.COLOR_CODE)
+            attr = cls.get_color(cls.COLOR_CODE)
             text = ("  " + raw + comment_tag)
             rows.append((gutter + text[:content_width], attr, line.line_number))
 
         elif line.line_type == "horizontal_rule":
-            attr = curses.color_pair(cls.COLOR_GUTTER)
+            attr = cls.get_color(cls.COLOR_GUTTER)
             hr = "─" * min(content_width, 60)
             rows.append((gutter + hr, attr, line.line_number))
 
         elif line.line_type == "blank":
-            attr = curses.color_pair(cls.COLOR_DEFAULT)
+            attr = cls.get_color(cls.COLOR_DEFAULT)
             rows.append((gutter, attr, line.line_number))
 
         else:
-            attr = curses.color_pair(cls.COLOR_DEFAULT)
+            attr = cls.get_color(cls.COLOR_DEFAULT)
             text = raw + comment_tag
             wrapped = textwrap.wrap(text, width=content_width) or [""]
             for i, w in enumerate(wrapped):

@@ -6,20 +6,26 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
 - **Commit Message as Historical Model Input Snapshot**: Review comments, instructions, prompts, and Claude Code Q/A pairs are historical snapshots of contextual instructions given to the model. They belong in the commit message body under the model header (tagged with reference identifiers like `[Ref 1]`, `[Ref 2]`), keeping historical records immutable without generating throwaway markdown files per commit.
 - **Git Notes for Rebase-Tolerant `diff -p` Context Anchors**: Line anchors and document locations shift when rebases or operational transformations (OT) occur. Git Notes attach each reference number (`[Ref 1]`, `[Ref 2]`) to its `diff -p` type context (`@@ ## Enclosing Heading / Symbol @@`, line number, and context hunk), enabling anchors to be tracked and updated independently of immutable commit SHAs.
 - **Claude Code Q/A Format**: First-class support for conversational Q/A prompts (`Q: ... / A: ...`), treating Q/A as contextual instructions rather than document annotations.
-- **Reference Bookmark (`pending-push`)**: Displays `pending-push` (`2cb59ca`) as an immutable reference bookmark preserving the example of a temporary commit format on `staging`.
 
 ---
 
 ## Features
 
 - **Backwards-Compatible Commit Modes**:
-  - **Temporary Commit (Model Name Only)**: The commit message is literally just `<model_name>` (e.g. `gemini 3.8 flash high`), matching the `pending-push` bookmark on `staging`. Review anchors attach to Git Notes.
+  - **Temporary Commit (Model Name Only)**: The commit message is literally just `<model_name>` (e.g. `gemini 3.8 flash high`). Review anchors attach to Git Notes.
   - **Detailed Mode (Model Input Snapshot)**: Subject line is the model name. Body contains general prompt notes, Claude Code Q/A items, line comments tagged with `[Ref N]`, and RFC 822 trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Reviewed-At`).
 - **Rebase-Tolerant `diff -p` Git Notes**:
   - Automatically extracts `diff -p` hunk headers (`@@ ## Section @@` or function/class definitions) and surrounding hunk lines.
   - Stored in Git Notes (`refs/notes/commits`), keeping commit messages clean and immutable.
 - **Claude Code Q/A Integration**:
   - Add and anchor interactive Q/A dialogues directly into the commit model input snapshot.
+- **GNU less / vim Compatible Navigation**:
+  - `j` / `k`: Move down / up 1 line.
+  - `d` / `^D`: Scroll down half window.
+  - `u` / `^U`: Scroll up half window.
+  - `g` / `G`: Jump to beginning / end of document.
+  - `f` / `Space` / `b`: Page down / Page up.
+  - Dynamic cursor visibility ensures the document scrolls whenever the cursor moves or lines wrap.
 - **WYSIWYG Markdown Rendering**:
   - Line numbers gutter (`001`, `002`...) with dynamic `[★ Ref N]` badges.
   - Rendered GitHub alert callouts (`[!NOTE]`, `[!IMPORTANT]`, `[!TIP]`, `[!WARNING]`, `[!CAUTION]`).
@@ -52,10 +58,15 @@ Or specify a plan file explicitly:
 | --- | --- |
 | `j` / `↓` | Move down 1 line |
 | `k` / `↑` | Move up 1 line |
-| `PgDn` / `PgUp` | Page down / Page up |
+| `d` / `^D` | Scroll down half screen (GNU `less`) |
+| `u` / `^U` | Scroll up half screen (GNU `less`) |
+| `g` | Jump to top of document (line 1) |
+| `G` | Jump to end of document |
+| `f` / `Space` / `PgDn` | Page down |
+| `b` / `PgUp` | Page up |
 | `a` | Add Claude Code Q/A item (prompt snapshot) |
 | `c` / `Enter` | Add or edit comment for selected line (assigns `[Ref N]`) |
-| `d` / `x` | Delete comment on selected line |
+| `x` | Delete review comment on selected line |
 | `p` | Paste from clipboard & jump to matching text in document |
 | `m` | Configure model name (e.g. `gemini 3.8 flash high`, `claude-3-5-sonnet`) |
 | `t` | Toggle commit mode (`model_only` vs `detailed`) |
@@ -63,7 +74,7 @@ Or specify a plan file explicitly:
 | `Tab` / `s` | Toggle side-by-side split pane |
 | `y` | Copy formatted git commit message to macOS clipboard |
 | `n` | Copy Git Notes (`diff -p` context anchors) to macOS clipboard |
-| `G` | Create git commit & automatically attach Git Notes |
+| `C` | Create git commit & automatically attach Git Notes |
 | `?` | Show help modal |
 | `q` / `Esc` | Quit |
 
@@ -75,7 +86,7 @@ Run with the `--gui` flag:
 ./review --gui
 ```
 This starts a lightweight local server at `http://127.0.0.1:8765` and opens your browser.
-- **Branch & Bookmark Badges**: View current branch, default branch (`staging`), and `pending-push` reference bookmark hash.
+- **Branch Badges**: View current branch and default branch (`staging`).
 - **Claude Code Q/A Card**: Add question and answer prompt pairs with live preview.
 - **Dual Preview Panels**:
   - **Commit Message Box**: Model input snapshot (prompt + Q/A + `[Ref N]` review comments).
@@ -131,5 +142,7 @@ Hunk:
 ## Running Tests
 Run the unit test suite:
 ```bash
-python3 -m unittest discover -s review-anchor/tests -p "test_*.py"
+./review-anchor/tests/run_tests.sh
+# or:
+.venv/bin/python -m unittest discover -s review-anchor/tests -p "test_*.py"
 ```
