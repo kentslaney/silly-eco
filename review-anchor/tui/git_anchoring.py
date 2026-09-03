@@ -1,365 +1,214 @@
 """
-Git Anchoring and Commit Formatter.
-Maintains 100% backwards compatibility with the existing commit scheme:
-- Model-Only Mode (matching 'pending-push' tag on staging): Commit message is JUST the configurable model name (e.g. 'gemini 3.8 flash high').
-- Detailed Mode: Subject is the model name, body is the user prompt / review comments, with RFC 822 trailers.
-Integrates branch awareness (default: 'staging'), 'pending-push' tag inspection, and Git Notes for review posterity.
+Git plumbing for Review Anchor.
+
+Everything about *message shape* lives in :mod:`tui.exchange`; this module only
+talks to git -- branch and tag inspection, committing, and reading history back
+out so old commits can be imported into the exchange log.
+
+The commit convention this preserves, as practised in this repo's history:
+
+* subject line is a short label, by convention the model name
+  (``gemini 3.8 flash high``), sometimes a plain note (``manual change``);
+* the body, when there is one, is the prompt verbatim;
+* the ``pending-push`` tag bookmarks the subject-only "temporary commit" style.
+
+Nothing here contacts a model API.  Prompts and responses move by clipboard.
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 import json
 import os
-import re
 import subprocess
-from typing import Dict, List, Optional, Tuple
-from .markdown_parser import MarkdownLine
+from typing import Dict, List, Optional, Sequence, Tuple
+
+from .exchange import Exchange
+from .store import slugify
+
+RECORD_SEP = "\x1e"
+FIELD_SEP = "\x1f"
 
 
 @dataclass
-class ReviewComment:
-    line_number: int
-    line_text: str
-    section_name: str
-    section_slug: str
-    comment_text: str
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).astimezone().isoformat())
-    author: str = ""
+class CommitRecord:
+    sha: str
+    short: str
+    date: str
+    author: str
+    message: str
 
 
-class GitAnchoring:
-    DEFAULT_MODEL = "gemini 3.8 flash high"
-    DEFAULT_BRANCH = "staging"
+class Git:
+    """Thin wrapper over the handful of git commands the tool needs."""
 
-    def __init__(self, repo_root: Optional[str] = None, plan_path: str = "implementation_plan.md"):
-        self.repo_root = repo_root or self._find_repo_root()
-        self.plan_path = plan_path
-        self.model_header = self._detect_commit_scheme()
-        self.commit_mode = "model_only"  # 'model_only' (pending-push style) or 'detailed'
-        self.target_branch = self.DEFAULT_BRANCH
-        self.author_name = self._detect_git_author()
-        self.comments: Dict[int, List[ReviewComment]] = {}
-        
-        self.load_config()
-        self.load_persisted_comments()
+    def __init__(self, repo_root: Optional[str] = None):
+        self.repo_root = repo_root or self.discover_root()
 
-    def _find_repo_root(self) -> str:
-        try:
-            res = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
-        except Exception:
-            pass
-        return os.getcwd()
-
-    def _detect_commit_scheme(self) -> str:
-        """Detect model name from 'pending-push' tag or latest commits."""
-        try:
-            # 1. Check pending-push commit message
-            res_tag = subprocess.run(
-                ["git", "log", "-n", "1", "--pretty=format:%s", "pending-push"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res_tag.returncode == 0 and res_tag.stdout.strip():
-                return res_tag.stdout.strip()
-
-            # 2. Check recent commit subjects
-            res = subprocess.run(
-                ["git", "log", "-n", "5", "--pretty=format:%s"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res.returncode == 0:
-                lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
-                for line in lines:
-                    if "gemini" in line.lower():
-                        return line
-        except Exception:
-            pass
-        return self.DEFAULT_MODEL
-
-    def _detect_git_author(self) -> str:
-        """Detect author name and email from git config."""
-        try:
-            name = subprocess.run(["git", "config", "user.name"], stdout=subprocess.PIPE, text=True, check=False).stdout.strip()
-            email = subprocess.run(["git", "config", "user.email"], stdout=subprocess.PIPE, text=True, check=False).stdout.strip()
-            if name and email:
-                return f"{name} <{email}>"
-            elif name:
-                return name
-        except Exception:
-            pass
-        return "Reviewer"
-
-    # Git Inspection
-    def get_current_branch(self) -> str:
-        try:
-            res = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res.returncode == 0:
-                return res.stdout.strip()
-        except Exception:
-            pass
-        return "unknown"
-
-    def get_default_branch(self) -> str:
-        try:
-            res = subprocess.run(
-                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res.returncode == 0:
-                full_ref = res.stdout.strip()
-                return full_ref.replace("refs/remotes/origin/", "")
-        except Exception:
-            pass
-        return self.DEFAULT_BRANCH
-
-    def get_pending_push_info(self) -> Tuple[Optional[str], bool]:
-        """Returns (pending_push_short_hash, is_head_equal_to_pending_push)."""
-        try:
-            res_tag = subprocess.run(
-                ["git", "rev-parse", "--short", "pending-push"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res_tag.returncode != 0:
-                return None, False
-
-            tag_hash = res_tag.stdout.strip()
-            res_head = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            head_hash = res_head.stdout.strip() if res_head.returncode == 0 else ""
-            return tag_hash, (tag_hash == head_hash)
-        except Exception:
-            return None, False
-
-    # Comments Management
-    def add_comment(self, line: MarkdownLine, comment_text: str, section_name: str = "", section_slug: str = ""):
-        if not comment_text.strip():
-            return
-        rc = ReviewComment(
-            line_number=line.line_number,
-            line_text=line.raw_text.strip(),
-            section_name=section_name,
-            section_slug=section_slug,
-            comment_text=comment_text.strip(),
-            author=self.author_name
+    @staticmethod
+    def discover_root(start: Optional[str] = None) -> str:
+        res = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=start or os.getcwd(),
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        if line.line_number not in self.comments:
-            self.comments[line.line_number] = []
-        self.comments[line.line_number].append(rc)
-        self.save_persisted_comments()
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+        return start or os.getcwd()
 
-    def remove_comments_for_line(self, line_number: int):
-        if line_number in self.comments:
-            del self.comments[line_number]
-            self.save_persisted_comments()
+    def run(self, *args: str) -> Tuple[int, str, str]:
+        res = subprocess.run(
+            ["git", *args], cwd=self.repo_root, capture_output=True, text=True, check=False
+        )
+        return res.returncode, res.stdout.strip(), res.stderr.strip()
 
-    def get_comments(self) -> List[ReviewComment]:
-        all_comments = []
-        for lnum in sorted(self.comments.keys()):
-            all_comments.extend(self.comments[lnum])
-        return all_comments
+    def out(self, *args: str, default: str = "") -> str:
+        code, out, _ = self.run(*args)
+        return out if code == 0 else default
 
-    # Formatting
-    def format_commit_message(self, general_prompt: Optional[str] = None, mode: Optional[str] = None) -> str:
-        """
-        Formats commit message according to active mode:
-        - 'model_only': JUST the configurable model name (e.g. 'gemini 3.8 flash high')
-        - 'detailed': model name + prompt + line anchors + RFC 822 trailers
-        """
-        active_mode = mode or self.commit_mode
-        header = self.model_header.strip()
+    # -- inspection ------------------------------------------------------
+    def current_branch(self) -> str:
+        return self.out("rev-parse", "--abbrev-ref", "HEAD", default="unknown")
 
-        if active_mode == "model_only":
-            return header
+    def default_branch(self) -> str:
+        ref = self.out("symbolic-ref", "refs/remotes/origin/HEAD")
+        if ref:
+            return ref.replace("refs/remotes/origin/", "")
+        return "staging"
 
-        # Detailed mode
-        body_parts: List[str] = []
-        if general_prompt and general_prompt.strip():
-            body_parts.append(general_prompt.strip())
+    def author(self) -> str:
+        name = self.out("config", "user.name")
+        email = self.out("config", "user.email")
+        if name and email:
+            return f"{name} <{email}>"
+        # Fall back to whoever authored the last commit: the tool is often run
+        # somewhere the global git config is not visible.
+        return name or self.out("log", "-1", "--format=%an <%ae>") or "Reviewer"
 
-        all_comments = self.get_comments()
-        if all_comments:
-            body_parts.append(self.format_review_body())
+    def tag_info(self, tag: str = "pending-push") -> Tuple[Optional[str], bool]:
+        """(short sha of the tag, whether HEAD is sitting on it)."""
+        code, sha, _ = self.run("rev-parse", "--short", tag)
+        if code != 0:
+            return None, False
+        head = self.out("rev-parse", "--short", "HEAD")
+        return sha, sha == head
 
-        if not body_parts:
-            return header
+    def is_dirty(self) -> bool:
+        return bool(self.out("status", "--porcelain"))
 
-        return f"{header}\n\n" + "\n\n".join(body_parts)
+    def blob_rev(self, path: str, short: int = 7) -> str:
+        return self.out("hash-object", path)[:short]
 
-    def format_review_body(self) -> str:
-        """Formats the review comments block and RFC 822 trailers."""
-        all_comments = self.get_comments()
-        if not all_comments:
-            return ""
-
-        rel_plan = os.path.basename(self.plan_path)
-        blocks = [f"Reviewed {rel_plan}:"]
-
-        for c in all_comments:
-            sec_info = f" Section: \"{c.section_name}\"" if c.section_name else ""
-            snippet = f"> \"{c.line_text}\"" if c.line_text else ""
-            entry = f"[Line {c.line_number}]{sec_info}\n{snippet}\nReview: {c.comment_text}".strip()
-            blocks.append(entry)
-
-        # Trailers (RFC 822 format)
-        trailers = [
-            f"Review-Doc: {rel_plan}",
-            f"Review-Anchor: #{all_comments[0].section_slug or f'L{all_comments[0].line_number}'}"
-        ]
-        if self.author_name:
-            trailers.append(f"Reviewed-By: {self.author_name}")
-        trailers.append(f"Reviewed-At: {datetime.now(timezone.utc).astimezone().isoformat()}")
-
-        return "\n\n".join(blocks) + "\n\n" + "\n".join(trailers)
-
-    # Commit Execution
-    def execute_commit(
-        self,
-        general_prompt: Optional[str] = None,
-        mode: Optional[str] = None
-    ) -> Tuple[bool, str]:
-        """
-        Runs git commit using the formatted message:
-        - In 'model_only' mode: commit message is strictly the model name
-          (matching the temporary commit example bookmarked at 'pending-push').
-          Review comments are preserved in Git Notes.
-        - In 'detailed' mode: commit message includes the full review body & trailers.
-        """
-        active_mode = mode or self.commit_mode
-        msg = self.format_commit_message(general_prompt=general_prompt, mode=active_mode)
-
-        try:
-            res = subprocess.run(
-                ["git", "commit", "-m", msg],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
+    # -- history ---------------------------------------------------------
+    def log(self, limit: int = 0, rev_range: str = "HEAD") -> List[CommitRecord]:
+        fmt = FIELD_SEP.join(["%H", "%h", "%aI", "%an <%ae>", "%B"]) + RECORD_SEP
+        args = ["log", "--reverse", "--no-merges", f"--format={fmt}"]
+        if limit:
+            args += [f"-n{limit}"]
+        args += [rev_range]
+        code, out, _ = self.run(*args)
+        if code != 0:
+            return []
+        records = []
+        for chunk in out.split(RECORD_SEP):
+            if not chunk.strip():
+                continue
+            parts = chunk.lstrip("\n").split(FIELD_SEP)
+            if len(parts) < 5:
+                continue
+            records.append(
+                CommitRecord(
+                    sha=parts[0], short=parts[1], date=parts[2], author=parts[3], message=parts[4]
+                )
             )
-            if res.returncode != 0:
-                return False, f"Git commit failed: {res.stderr.strip()}"
+        return records
 
-            # Attach review comments to Git Notes if in model_only mode
-            review_body = self.format_review_body()
-            if active_mode == "model_only" and review_body:
-                subprocess.run(
-                    ["git", "notes", "add", "-f", "-m", review_body, "HEAD"],
-                    cwd=self.repo_root,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    check=False
-                )
+    def find_commit_for_log(self, rel_log_path: str) -> Optional[str]:
+        """Locate the commit whose trailer points at an exchange file."""
+        out = self.out("log", "--format=%h", f"--grep=Review-Log: {rel_log_path}")
+        return out.splitlines()[0] if out else None
 
-            return True, "✓ Commit created successfully!"
-        except Exception as e:
-            return False, str(e)
+    # -- writing ---------------------------------------------------------
+    def commit(self, message: str, add_all: bool = True) -> Tuple[bool, str]:
+        if add_all:
+            code, _, err = self.run("add", "-A")
+            if code != 0:
+                return False, f"git add failed: {err}"
+        code, out, err = self.run("commit", "-m", message)
+        if code != 0:
+            return False, (err or out or "git commit failed")
+        return True, self.out("log", "-1", "--format=%h %s")
 
-    # Persistence
-    def _config_path(self) -> str:
-        return os.path.join(self.repo_root, ".review_config.json")
 
-    def _persisted_path(self) -> str:
-        return os.path.join(self.repo_root, ".review_anchors.json")
+class Config:
+    """Small persisted settings blob (``.review_config.json``, gitignored)."""
 
-    def save_config(self):
+    FILENAME = ".review_config.json"
+    DEFAULTS: Dict[str, object] = {
+        "model": "claude opus 5",
+        "doc": "implementation_plan.md",
+        "bare_commit": False,
+        "wrap_width": 80,
+        "trailers": [],
+    }
+
+    def __init__(self, repo_root: str):
+        self.path = os.path.join(repo_root, self.FILENAME)
+        self.data = dict(self.DEFAULTS)
+        self.load()
+
+    def load(self) -> None:
         try:
-            cfg = {
-                "model_name": self.model_header,
-                "commit_mode": self.commit_mode,
-                "target_branch": self.target_branch
-            }
-            with open(self._config_path(), "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2)
-        except Exception:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                self.data.update(loaded)
+        except (OSError, ValueError):
             pass
 
-    def load_config(self):
-        path = self._config_path()
-        if not os.path.exists(path):
-            return
+    def save(self) -> None:
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            if "model_name" in cfg and cfg["model_name"]:
-                self.model_header = cfg["model_name"]
-            if "commit_mode" in cfg and cfg["commit_mode"] in ("model_only", "detailed"):
-                self.commit_mode = cfg["commit_mode"]
-            if "target_branch" in cfg and cfg["target_branch"]:
-                self.target_branch = cfg["target_branch"]
-        except Exception:
+            with open(self.path, "w", encoding="utf-8") as fh:
+                json.dump(self.data, fh, indent=2)
+        except OSError:
             pass
 
-    def save_persisted_comments(self):
-        try:
-            data = []
-            for c in self.get_comments():
-                data.append({
-                    "line_number": c.line_number,
-                    "line_text": c.line_text,
-                    "section_name": c.section_name,
-                    "section_slug": c.section_slug,
-                    "comment_text": c.comment_text,
-                    "timestamp": c.timestamp,
-                    "author": c.author
-                })
-            with open(self._persisted_path(), "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception:
-            pass
+    def __getitem__(self, key: str):
+        return self.data.get(key, self.DEFAULTS.get(key))
 
-    def load_persisted_comments(self):
-        path = self._persisted_path()
-        if not os.path.exists(path):
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.comments.clear()
-            for item in data:
-                rc = ReviewComment(
-                    line_number=item["line_number"],
-                    line_text=item.get("line_text", ""),
-                    section_name=item.get("section_name", ""),
-                    section_slug=item.get("section_slug", ""),
-                    comment_text=item.get("comment_text", ""),
-                    timestamp=item.get("timestamp", ""),
-                    author=item.get("author", "")
-                )
-                if rc.line_number not in self.comments:
-                    self.comments[rc.line_number] = []
-                self.comments[rc.line_number].append(rc)
-        except Exception:
-            pass
+    def __setitem__(self, key: str, value) -> None:
+        self.data[key] = value
+        self.save()
+
+    @property
+    def extra_trailers(self) -> List[Tuple[str, str]]:
+        out = []
+        for item in self.data.get("trailers") or []:
+            if isinstance(item, str) and ":" in item:
+                k, _, v = item.partition(":")
+                out.append((k.strip(), v.strip()))
+        return out
+
+
+def import_history(git: Git, store, limit: int = 0, rev_range: str = "HEAD") -> List[str]:
+    """Backfill ``reviews/`` from existing commits.
+
+    Proof that the format is backwards compatible: every commit already in the
+    repo -- prompt-in-the-body ones, subject-only temporary commits, the
+    GitHub-generated root commit -- reads back as a valid exchange.
+    """
+    written: List[str] = []
+    existing = {os.path.basename(p) for p in store.paths()}
+    number = store.next_number()
+    for rec in git.log(limit=limit, rev_range=rev_range):
+        ex = Exchange.from_commit_message(rec.message, date=rec.date, state="closed")
+        ex.meta["commit"] = rec.short
+        title = ex.subject if len(ex.subject) < 60 else (ex.prompt.splitlines() or [ex.subject])[0]
+        name = f"{number:04d}-{slugify(title)}.md"
+        if name in existing:
+            continue
+        path = os.path.join(store.dir, name)
+        ex.save(path)
+        written.append(path)
+        number += 1
+    return written

@@ -1,144 +1,92 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Review Anchor - Antigravity IDE Side-by-Side Reviewer</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review Anchor</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-container">
-    <!-- Header Controls -->
-    <header class="top-bar">
-      <div class="brand">
-        <span class="logo-icon">⚓</span>
-        <span class="logo-text">Review Anchor</span>
-        <span class="badge" id="planFilename">implementation_plan.md</span>
-        <span class="badge badge-git" id="gitBranchBadge">flash-3.8 → staging</span>
-        <span class="badge badge-tag" id="pendingTagBadge" title="Reference bookmark for temporary commit example">Bookmark: pending-push</span>
-      </div>
+<header>
+  <span class="brand">review anchor</span>
+  <span class="badges">
+    <span class="badge" id="branch">…</span>
+    <span class="badge" id="bookmark">…</span>
+    <span class="badge warn" id="stale" hidden>doc changed since anchoring</span>
+  </span>
+  <span class="spacer"></span>
+  <label class="ctl">exchange
+    <select id="log"></select>
+  </label>
+  <label class="ctl">font
+    <input type="range" id="size" min="10" max="22" step="1" value="14">
+    <span id="sizeout">14px</span>
+  </label>
+  <label class="ctl">
+    <select id="family">
+      <option value="ui-monospace, SFMono-Regular, Menlo, monospace">mono</option>
+      <option value="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">system</option>
+      <option value="Georgia, 'Times New Roman', serif">serif</option>
+    </select>
+  </label>
+  <button id="new">new</button>
+</header>
 
-      <div class="controls-group">
-        <label class="control-item">
-          <span>Font: <strong id="fontSizeVal">14px</strong></span>
-          <input type="range" id="fontSizeSlider" min="10" max="22" value="14" step="1">
-        </label>
+<main>
+  <section id="docpane">
+    <div class="panehead"><span id="docname">…</span><span class="hint">click a line to anchor a comment · shift-click for a range</span></div>
+    <div id="doc" class="doc"></div>
+  </section>
 
-        <label class="control-item">
-          <select id="fontSelect">
-            <option value="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">SF Pro / System</option>
-            <option value="'JetBrains Mono', 'Fira Code', Menlo, monospace">JetBrains Mono / Menlo</option>
-            <option value="'Inter', sans-serif">Inter</option>
-          </select>
-        </label>
+  <section id="side">
+    <nav class="tabs">
+      <button data-tab="prompt" class="on">prompt</button>
+      <button data-tab="anchors">anchors <span id="ancount" class="pill">0</span></button>
+      <button data-tab="response">response</button>
+      <button data-tab="commit">commit</button>
+    </nav>
 
-        <div class="search-box">
-          <input type="text" id="searchInput" placeholder="Search & jump...">
-          <button id="searchBtn" title="Search">🔍</button>
-        </div>
-
-        <button class="btn btn-primary" id="copyCommitBtn">📋 Copy Git Commit</button>
-      </div>
-    </header>
-
-    <!-- Main Side-by-Side Workspace -->
-    <div class="workspace">
-      <!-- Left Pane: WYSIWYG Document Viewer -->
-      <section class="pane doc-pane">
-        <div class="pane-header">
-          <h2>WYSIWYG Document (Match to Antigravity IDE)</h2>
-          <span class="pane-subtitle" id="lineCountLabel">0 lines</span>
-        </div>
-        <div class="doc-viewport" id="docViewport">
-          <div id="docContent"></div>
-        </div>
-      </section>
-
-      <!-- Right Pane: Review Comments & Git Commit Formatter -->
-      <section class="pane review-pane">
-        <div class="pane-header">
-          <h2>Git Commit & Review Anchors</h2>
-          <span class="tag-status" id="commitSchemeBadge">Default: staging</span>
-        </div>
-
-        <div class="review-scroll-container">
-          <!-- Commit Mode Selector (UX for pending-push style) -->
-          <div class="mode-selector-card">
-            <div class="mode-title">Commit Message Format:</div>
-            <div class="mode-options">
-              <label class="mode-radio">
-                <input type="radio" name="commitMode" value="model_only" id="modeModelOnly" checked>
-                <span><strong>Model Name Only</strong> (as in <code>pending-push</code>)</span>
-              </label>
-              <label class="mode-radio">
-                <input type="radio" name="commitMode" value="detailed" id="modeDetailed">
-                <span><strong>Detailed Review</strong> (Model + Prompt + Anchors)</span>
-              </label>
-            </div>
-            <small class="helper-text" id="modeExplanation">
-              Commit message will be strictly the model name. Review anchors are attached via Git Notes.
-            </small>
-          </div>
-
-          <!-- Model Subject Line -->
-          <div class="form-group">
-            <div class="label-with-presets">
-              <label for="commitSubject">Configurable Model Name:</label>
-              <div class="preset-chips">
-                <button type="button" class="chip" data-model="gemini 3.8 flash high">gemini 3.8 flash high</button>
-                <button type="button" class="chip" data-model="gemini 1.5 pro">gemini 1.5 pro</button>
-                <button type="button" class="chip" data-model="claude-3-5-sonnet">claude 3.5</button>
-              </div>
-            </div>
-            <input type="text" id="commitSubject" value="gemini 3.8 flash high">
-          </div>
-
-          <!-- General prompt / instructions (active in detailed mode) -->
-          <div class="form-group" id="promptGroup">
-            <label for="generalPrompt">Review Instructions / Prompt Text:</label>
-            <textarea id="generalPrompt" rows="2" placeholder="Overall review guidance or approval notes..."></textarea>
-          </div>
-
-          <!-- Anchored comments list -->
-          <div class="comments-section">
-            <div class="section-title-row">
-              <h3>Line Anchors (<span id="commentCount">0</span>)</h3>
-              <button class="btn-text" id="clearCommentsBtn">Clear All</button>
-            </div>
-            <div id="commentsList" class="comments-list">
-              <div class="empty-state">Click any line in the document to anchor a review comment.</div>
-            </div>
-          </div>
-
-          <!-- Generated Git Commit Message Preview -->
-          <div class="commit-preview-section">
-            <div class="preview-header">
-              <h3>Commit Message Preview</h3>
-              <div class="action-buttons-row">
-                <button class="btn btn-sm" id="copyPreviewBtn">Copy</button>
-                <button class="btn btn-sm btn-primary" id="commitBtn">Create Commit</button>
-              </div>
-            </div>
-            <pre class="commit-preview-box" id="commitPreviewBox"></pre>
-          </div>
-        </div>
-      </section>
-    </div>
-  </div>
-
-  <!-- Comment Modal Dialog -->
-  <dialog id="commentDialog" class="modal">
-    <div class="modal-content">
-      <h3 id="modalTitle">Anchor Comment on Line</h3>
-      <p class="snippet-preview" id="modalSnippet"></p>
-      <textarea id="modalCommentInput" rows="4" placeholder="Paste or enter your review comment for this line..."></textarea>
-      <div class="modal-actions">
-        <button class="btn" id="modalCancelBtn">Cancel</button>
-        <button class="btn btn-primary" id="modalSaveBtn">Save Anchor</button>
+    <div class="tabbody" data-tab="prompt">
+      <label class="field">model <input id="model" placeholder="claude opus 5"></label>
+      <label class="field">subject <input id="subject" placeholder="defaults to the model name"></label>
+      <textarea id="prompt" placeholder="What you are asking for. This becomes the commit body, exactly as typed."></textarea>
+      <div class="row">
+        <button id="copyprompt" class="primary">copy prompt + anchors</button>
+        <span class="hint">paste it into the chat, then bring the answer back</span>
       </div>
     </div>
-  </dialog>
 
-  <script src="app.js"></script>
+    <div class="tabbody" data-tab="anchors" hidden>
+      <div id="anchors"></div>
+      <div class="row"><button id="verify">verify anchors</button><span class="hint" id="verifyout"></span></div>
+    </div>
+
+    <div class="tabbody" data-tab="response" hidden>
+      <textarea id="response" placeholder="Paste the model's reply here. It stays in the exchange file, not in the commit message."></textarea>
+      <div class="row"><button id="pasteresponse">paste from clipboard</button></div>
+    </div>
+
+    <div class="tabbody" data-tab="commit" hidden>
+      <label class="field inline"><input type="checkbox" id="bare"> bare commit — subject line only, the <code>pending-push</code> style</label>
+      <pre id="commit"></pre>
+      <div class="row">
+        <button id="copycommit">copy message</button>
+        <button id="docommit" class="primary">git add -A &amp;&amp; commit</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="commentbox">
+  <form method="dialog">
+    <p id="commentwhere" class="hint"></p>
+    <pre id="commentquote"></pre>
+    <textarea id="commenttext" placeholder="comment"></textarea>
+    <menu><button value="cancel">cancel</button><button value="ok" class="primary">anchor</button></menu>
+  </form>
+</dialog>
+
+<footer id="status">ready</footer>
+<script src="app.js"></script>
 </body>
 </html>

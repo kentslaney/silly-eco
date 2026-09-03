@@ -1,374 +1,552 @@
 """
-Interactive Curses TUI Application for Review Anchoring.
-Provides side-by-side WYSIWYG markdown viewing, line-by-line comment anchoring,
-configurable model names, and backwards-compatible git commit & 'pending-push' tag management.
+Curses front end.
+
+Left pane renders the design doc WYSIWYG, at an adjustable wrap width so the
+line breaks can be matched side by side against the Antigravity IDE review
+pane.  Right pane is the exchange: the prompt being drafted, the anchored
+comments, the response pasted back, and the commit message they render to.
+
+The tool never calls a model API.  ``y`` copies the composed prompt out, ``R``
+pastes the response back in; in between you are in whatever chat window you
+like.
 """
 
 import curses
 import os
 import subprocess
+import tempfile
 from typing import List, Optional, Tuple
+
 from .clipboard import Clipboard
-from .git_anchoring import GitAnchoring, ReviewComment
+from .exchange import Anchor, Exchange, blob_rev, now_stamp
+from .git_anchoring import Config, Git
 from .markdown_parser import MarkdownLine, MarkdownParser
+from .store import ReviewStore
 from .wysiwyg_renderer import WysiwygRenderer
+
+TABS = ("commit", "prompt", "response", "anchors")
 
 
 class ReviewAnchorTUI:
     def __init__(self, plan_path: str, repo_root: Optional[str] = None):
+        self.git = Git(repo_root)
+        self.repo_root = self.git.repo_root
         self.plan_path = plan_path
-        self.repo_root = repo_root or os.getcwd()
-        self.markdown_lines: List[MarkdownLine] = []
-        self.git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
-        
-        # State
-        self.selected_line_idx = 0
-        self.scroll_offset = 0
-        self.wrap_width = 80
-        self.show_split_pane = True
-        self.status_message = "Press 'c' to comment, 'm' for model, 't' toggle mode, 'G' commit, '?' for help"
-        
-        self.load_file()
+        self.doc_rel = os.path.relpath(plan_path, self.repo_root)
+        self.config = Config(self.repo_root)
+        self.store = ReviewStore(self.repo_root)
+        Clipboard.fallback_dir = self.repo_root
 
-    def load_file(self):
+        self.exchange = self.store.current() or self.store.create(
+            model=str(self.config["model"]), doc=self.doc_rel
+        )
+
+        self.lines: List[MarkdownLine] = []
+        self.cursor = 0
+        self.scroll = 0
+        self.mark: Optional[int] = None
+        self.tab = 0
+        self.pane_scroll = 0
+        self.wrap_width = int(self.config["wrap_width"] or 80)
+        self.split = True
+        self.status = "? for help  ·  c comment  ·  y copy prompt  ·  R paste response  ·  C commit"
+        self.load_doc()
+
+    # -- document ---------------------------------------------------------
+    def load_doc(self) -> None:
         if os.path.exists(self.plan_path):
-            self.markdown_lines = MarkdownParser.parse_file(self.plan_path)
+            self.lines = MarkdownParser.parse_file(self.plan_path)
         else:
-            self.markdown_lines = [
-                MarkdownLine(line_number=1, raw_text=f"# File not found: {self.plan_path}", line_type="heading", heading_level=1)
-            ]
+            self.lines = [MarkdownLine(1, f"# not found: {self.plan_path}", "heading", heading_level=1)]
+        self.cursor = min(self.cursor, max(0, len(self.lines) - 1))
 
-    def _get_current_section(self) -> Tuple[str, str]:
-        if not self.markdown_lines:
-            return "", ""
-        current_idx = min(self.selected_line_idx, len(self.markdown_lines) - 1)
-        for idx in range(current_idx, -1, -1):
-            line = self.markdown_lines[idx]
-            if line.line_type == "heading":
-                title = line.raw_text.lstrip("#").strip()
-                return title, line.heading_slug
+    def raw_lines(self) -> List[str]:
+        return [l.raw_text for l in self.lines]
+
+    def section_at(self, idx: int) -> Tuple[str, str]:
+        for i in range(min(idx, len(self.lines) - 1), -1, -1):
+            if self.lines[i].line_type == "heading":
+                return self.lines[i].raw_text.lstrip("#").strip(), self.lines[i].heading_slug
         return "", ""
 
-    def run(self):
-        curses.wrapper(self._main_loop)
+    def selection(self) -> Tuple[int, int]:
+        if self.mark is None:
+            return self.cursor, self.cursor
+        return min(self.mark, self.cursor), max(self.mark, self.cursor)
 
-    def _main_loop(self, stdscr):
+    def anchored_lines(self) -> set:
+        out = set()
+        for a in self.exchange.anchors_for(self.doc_rel):
+            lo, hi = a.span
+            out.update(range(lo, hi + 1))
+        return out
+
+    def doc_is_stale(self) -> bool:
+        rev = self.exchange.meta.get("doc-rev")
+        return bool(rev) and rev != blob_rev(self.plan_path)
+
+    # -- exchange ---------------------------------------------------------
+    def save_exchange(self) -> None:
+        self.exchange.sort_anchors()
+        self.exchange.save()
+
+    def log_rel(self) -> str:
+        return self.store.rel(self.exchange.path) if self.exchange.path else ""
+
+    def commit_message(self) -> str:
+        return self.exchange.commit_message(
+            log_path=self.log_rel(),
+            extra_trailers=self.config.extra_trailers,
+            bare=bool(self.config["bare_commit"]),
+        )
+
+    def switch(self, delta: int) -> None:
+        entries = self.store.entries()
+        if not entries:
+            return
+        cur = self.store.number_of(self.exchange)
+        nums = [n for n, _ in entries]
+        idx = nums.index(cur) if cur in nums else len(nums) - 1
+        idx = max(0, min(len(nums) - 1, idx + delta))
+        self.exchange = self.store.load(nums[idx]) or self.exchange
+        doc = self.exchange.doc
+        if doc:
+            candidate = os.path.join(self.repo_root, doc)
+            if os.path.exists(candidate):
+                self.plan_path, self.doc_rel = candidate, doc
+                self.load_doc()
+        self.status = f"exchange {nums[idx]:04d} [{self.exchange.state}]"
+
+    # -- main loop --------------------------------------------------------
+    def run(self) -> None:
+        curses.wrapper(self._loop)
+
+    def _loop(self, stdscr) -> None:
         curses.curs_set(0)
-        stdscr.clear()
         stdscr.keypad(True)
         WysiwygRenderer.init_colors()
 
         while True:
             max_y, max_x = stdscr.getmaxyx()
             stdscr.erase()
-
-            if max_y < 10 or max_x < 40:
-                stdscr.addstr(0, 0, "Terminal window too small.", curses.A_BOLD)
+            if max_y < 8 or max_x < 40:
+                stdscr.addstr(0, 0, "terminal too small")
                 stdscr.refresh()
-                key = stdscr.getch()
-                if key in (ord('q'), 27):
-                    break
+                if stdscr.getch() in (ord("q"), 27):
+                    return
                 continue
 
-            # Determine split widths
-            if self.show_split_pane and max_x >= 90:
-                doc_width = max(45, int(max_x * 0.56))
-                right_width = max_x - doc_width - 1
+            if self.split and max_x >= 92:
+                doc_w = max(46, int(max_x * 0.55))
+                right_w = max_x - doc_w - 1
             else:
-                doc_width = max_x
-                right_width = 0
+                doc_w, right_w = max_x, 0
 
-            # Render Document Pane
-            self._render_document_pane(stdscr, max_y - 2, doc_width)
-
-            # Render Right Split
-            if right_width > 0:
-                self._render_right_pane(stdscr, max_y - 2, doc_width + 1, right_width)
-
-            # Render Status Bar
-            self._render_status_bar(stdscr, max_y - 1, max_x)
-
+            self._draw_doc(stdscr, max_y - 1, doc_w)
+            if right_w:
+                self._draw_pane(stdscr, max_y - 1, doc_w + 1, right_w)
+            self._draw_status(stdscr, max_y - 1, max_x)
             stdscr.refresh()
 
             try:
                 key = stdscr.getch()
             except KeyboardInterrupt:
-                break
+                return
+            if self._handle(stdscr, key, max_y) is False:
+                return
 
-            # Handle Keypresses
-            if key in (ord('q'), 27):
-                break
-            elif key in (curses.KEY_UP, ord('k')):
-                if self.selected_line_idx > 0:
-                    self.selected_line_idx -= 1
-                    if self.selected_line_idx < self.scroll_offset:
-                        self.scroll_offset = self.selected_line_idx
-            elif key in (curses.KEY_DOWN, ord('j')):
-                if self.selected_line_idx < len(self.markdown_lines) - 1:
-                    self.selected_line_idx += 1
-                    visible_height = max_y - 4
-                    if self.selected_line_idx >= self.scroll_offset + visible_height:
-                        self.scroll_offset += 1
-            elif key == curses.KEY_PPAGE:
-                step = max(1, max_y - 4)
-                self.selected_line_idx = max(0, self.selected_line_idx - step)
-                self.scroll_offset = max(0, self.scroll_offset - step)
-            elif key == curses.KEY_NPAGE:
-                step = max(1, max_y - 4)
-                self.selected_line_idx = min(len(self.markdown_lines) - 1, self.selected_line_idx + step)
-                self.scroll_offset = min(max(0, len(self.markdown_lines) - step), self.scroll_offset + step)
-            elif key in (ord('+'), ord('=')):
-                self.wrap_width = min(140, self.wrap_width + 5)
-                self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
-            elif key in (ord('-'), ord('_')):
-                self.wrap_width = max(40, self.wrap_width - 5)
-                self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
-            elif key in (ord('\t'), ord('s')):
-                self.show_split_pane = not self.show_split_pane
-            elif key in (ord('c'), ord('\n'), 10, 13):
-                self._handle_add_comment(stdscr)
-            elif key in (ord('d'), ord('x')):
-                curr_line = self.markdown_lines[self.selected_line_idx].line_number
-                self.git_anchor.remove_comments_for_line(curr_line)
-                self.status_message = f"Cleared comments on line {curr_line}."
-            elif key == ord('p'):
-                self._handle_paste_search(stdscr)
-            elif key == ord('m'):
-                self._handle_configure_model(stdscr)
-            elif key == ord('t'):
-                self.git_anchor.commit_mode = "detailed" if self.git_anchor.commit_mode == "model_only" else "model_only"
-                self.git_anchor.save_config()
-                mode_desc = "Model Name Only (pending-push)" if self.git_anchor.commit_mode == "model_only" else "Detailed with Trailers"
-                self.status_message = f"Switched commit mode to: {mode_desc}"
-            elif key in (ord('y'), ord('Y')):
-                msg = self.git_anchor.format_commit_message()
-                if Clipboard.set_text(msg):
-                    self.status_message = f"✓ Copied commit message [{self.git_anchor.commit_mode}] to macOS clipboard!"
-                else:
-                    self.status_message = "Failed to copy to clipboard."
-            elif key in (ord('g'), ord('G')):
-                self._handle_git_commit(stdscr)
-            elif key == ord('?'):
-                self._show_help_dialog(stdscr)
-
-    def _render_document_pane(self, stdscr, max_y: int, width: int):
-        cur_line_num = self.markdown_lines[self.selected_line_idx].line_number if self.markdown_lines else 1
-        sec_name, _ = self._get_current_section()
-        curr_branch = self.git_anchor.get_current_branch()
-        def_branch = self.git_anchor.get_default_branch()
-        tag_hash, is_at_tag = self.git_anchor.get_pending_push_info()
-
-        bookmark_str = f"bookmark: {tag_hash}" if tag_hash else ""
-
-        header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} | {bookmark_str} "
-        stdscr.addstr(0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
-
-        row_y = 1
-        for idx in range(self.scroll_offset, len(self.markdown_lines)):
-            if row_y >= max_y:
-                break
-            mline = self.markdown_lines[idx]
-            is_selected = (idx == self.selected_line_idx)
-            has_comment = (mline.line_number in self.git_anchor.comments)
-
-            rendered_rows = WysiwygRenderer.format_line(
-                mline,
-                wrap_width=min(self.wrap_width, width - 2),
-                has_comment=has_comment,
-                is_selected=is_selected
-            )
-
-            for text, attr, lnum in rendered_rows:
-                if row_y >= max_y:
-                    break
-                line_display = text.ljust(width)[:width]
-                if is_selected:
-                    line_display = "▶ " + line_display[2:]
-                    stdscr.addstr(row_y, 0, line_display, curses.color_pair(WysiwygRenderer.COLOR_ACTIVE_LINE) | curses.A_BOLD)
-                else:
-                    stdscr.addstr(row_y, 0, line_display, attr)
-                row_y += 1
-
-    def _render_right_pane(self, stdscr, max_y: int, start_x: int, width: int):
-        for y in range(max_y):
-            stdscr.addstr(y, start_x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
-
-        mode_badge = "[MODEL-ONLY: pending-push]" if self.git_anchor.commit_mode == "model_only" else "[DETAILED + NOTES]"
-        title = f" COMMIT & REVIEW ({mode_badge}) "
-        stdscr.addstr(0, start_x, title.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
-
-        commit_msg = self.git_anchor.format_commit_message()
-        lines = commit_msg.splitlines()
-
-        row_y = 1
-        for line in lines:
-            if row_y >= max_y - 4:
-                break
-            if line.startswith("gemini") or line.startswith("Review-"):
-                attr = curses.color_pair(WysiwygRenderer.COLOR_HEADING1) | curses.A_BOLD
-            elif line.startswith("[Line"):
-                attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_IMPORTANT) | curses.A_BOLD
-            elif line.startswith("> "):
-                attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_NOTE)
+    def _handle(self, stdscr, key: int, max_y: int):
+        page = max(1, max_y - 4)
+        if key in (ord("q"), 27):
+            return False
+        elif key in (curses.KEY_DOWN, ord("j")):
+            self._move(1, max_y)
+        elif key in (curses.KEY_UP, ord("k")):
+            self._move(-1, max_y)
+        elif key == curses.KEY_NPAGE:
+            self._move(page, max_y)
+        elif key == curses.KEY_PPAGE:
+            self._move(-page, max_y)
+        elif key == ord("g"):
+            self.cursor = self.scroll = 0
+        elif key == ord("G"):
+            self.cursor = len(self.lines) - 1
+            self.scroll = max(0, self.cursor - max_y + 4)
+        elif key in (ord("+"), ord("=")):
+            self.wrap_width = min(160, self.wrap_width + 2)
+            self.config["wrap_width"] = self.wrap_width
+            self.status = f"wrap {self.wrap_width}"
+        elif key in (ord("-"), ord("_")):
+            self.wrap_width = max(40, self.wrap_width - 2)
+            self.config["wrap_width"] = self.wrap_width
+            self.status = f"wrap {self.wrap_width}"
+        elif key == ord("\t"):
+            self.split = not self.split
+        elif key in (ord("1"), ord("2"), ord("3"), ord("4")):
+            self.tab = key - ord("1")
+            self.pane_scroll = 0
+        elif key == ord("J"):
+            self.pane_scroll += 1
+        elif key == ord("K"):
+            self.pane_scroll = max(0, self.pane_scroll - 1)
+        elif key == ord("v"):
+            self.mark = None if self.mark is not None else self.cursor
+            self.status = "range mark cleared" if self.mark is None else "range mark set"
+        elif key in (ord("c"), ord("\n"), 10, 13):
+            self._add_anchor(stdscr)
+        elif key in (ord("d"), ord("x")):
+            self._delete_anchor()
+        elif key == ord("p"):
+            self._paste_jump()
+        elif key == ord("#"):
+            self._goto_line(stdscr)
+        elif key == ord("e"):
+            self._edit_file(stdscr, self.exchange.path)
+            self.exchange = Exchange.load(self.exchange.path)
+            self.status = "reloaded exchange"
+        elif key == ord("P"):
+            self.exchange.prompt = self._edit_text(stdscr, self.exchange.prompt, "prompt.md")
+            self.save_exchange()
+            self.status = "prompt updated"
+        elif key == ord("r"):
+            self.exchange.response = self._edit_text(stdscr, self.exchange.response, "response.md")
+            self.save_exchange()
+            self.status = "response updated"
+        elif key == ord("R"):
+            text = Clipboard.get_text().strip()
+            if text:
+                self.exchange.response = text
+                self.save_exchange()
+                self.tab = 2
+                self.status = f"pasted response ({len(text.splitlines())} lines)"
             else:
-                attr = curses.color_pair(WysiwygRenderer.COLOR_DEFAULT)
-
-            stdscr.addstr(row_y, start_x, line.ljust(width)[:width], attr)
-            row_y += 1
-
-        # Show Git Notes preview if in model_only mode and comments exist
-        if self.git_anchor.commit_mode == "model_only" and self.git_anchor.comments:
-            notes_hdr = "── Git Notes (Attached to Commit) ──"
-            stdscr.addstr(row_y, start_x, notes_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER))
-            row_y += 1
-            for n_line in self.git_anchor.format_review_body().splitlines():
-                if row_y >= max_y:
-                    break
-                stdscr.addstr(row_y, start_x, n_line.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_GUTTER))
-                row_y += 1
-
-    def _render_status_bar(self, stdscr, y: int, width: int):
-        bar = f" {self.status_message} "
-        stdscr.addstr(y, 0, bar.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR))
-
-    def _handle_configure_model(self, stdscr):
-        prompt_str = f"Set Model Name (current: '{self.git_anchor.model_header}'): "
-        curses.echo()
-        curses.curs_set(1)
-
-        max_y, max_x = stdscr.getmaxyx()
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, prompt_str[:max_x - 1], curses.A_BOLD)
-
-        try:
-            inp = stdscr.getstr(max_y - 1, min(len(prompt_str), max_x - 5)).decode("utf-8").strip()
-        except Exception:
-            inp = ""
-        finally:
-            curses.noecho()
-            curses.curs_set(0)
-
-        if inp:
-            self.git_anchor.model_header = inp
-            self.git_anchor.save_config()
-            self.status_message = f"✓ Configured model name: '{inp}'"
-        else:
-            self.status_message = "Model name unchanged."
-
-    def _handle_add_comment(self, stdscr):
-        curr_line = self.markdown_lines[self.selected_line_idx]
-        sec_name, sec_slug = self._get_current_section()
-
-        prompt_str = f"Comment for L{curr_line.line_number} (Enter to paste clipboard): "
-        curses.echo()
-        curses.curs_set(1)
-
-        max_y, max_x = stdscr.getmaxyx()
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, prompt_str[:max_x - 1], curses.A_BOLD)
-
-        try:
-            inp = stdscr.getstr(max_y - 1, min(len(prompt_str), max_x - 5)).decode("utf-8").strip()
-        except Exception:
-            inp = ""
-        finally:
-            curses.noecho()
-            curses.curs_set(0)
-
-        if not inp:
-            clip = Clipboard.get_text().strip()
-            if clip:
-                inp = clip
-
-        if inp:
-            self.git_anchor.add_comment(
-                line=curr_line,
-                comment_text=inp,
-                section_name=sec_name,
-                section_slug=sec_slug
+                self.status = "clipboard empty"
+        elif key == ord("y"):
+            where = Clipboard.set_text(self.exchange.compose_prompt())
+            self.status = f"prompt + {len(self.exchange.anchors)} anchors → {where}"
+        elif key == ord("Y"):
+            where = Clipboard.set_text(self.commit_message())
+            self.status = f"commit message → {where}"
+        elif key == ord("m"):
+            val = self._ask(stdscr, f"model [{self.exchange.model}]: ")
+            if val:
+                self.exchange.set("model", val)
+                self.config["model"] = val
+                self.save_exchange()
+                self.status = f"model = {val}"
+        elif key == ord("s"):
+            val = self._ask(stdscr, f"subject [{self.exchange.subject}]: ")
+            if val:
+                self.exchange.set("subject", val)
+                self.save_exchange()
+                self.status = f"subject = {val}"
+        elif key == ord("b"):
+            self.config["bare_commit"] = not bool(self.config["bare_commit"])
+            self.status = (
+                "bare commit: subject only (pending-push style)"
+                if self.config["bare_commit"]
+                else "full commit: subject + prompt + anchors + trailers"
             )
-            self.status_message = f"✓ Added comment to Line {curr_line.line_number}!"
-        else:
-            self.status_message = "Comment cancelled."
+        elif key == ord("V"):
+            self._verify()
+        elif key == ord("n"):
+            title = self._ask(stdscr, "title for new exchange: ")
+            self.exchange = self.store.create(
+                model=str(self.config["model"]), doc=self.doc_rel, title=title
+            )
+            self.status = f"created {os.path.basename(self.exchange.path)}"
+        elif key == ord("["):
+            self.switch(-1)
+        elif key == ord("]"):
+            self.switch(1)
+        elif key == ord("C"):
+            self._commit(stdscr)
+        elif key == ord("?"):
+            self._help(stdscr)
+        return True
 
-    def _handle_paste_search(self, stdscr):
+    def _move(self, delta: int, max_y: int) -> None:
+        self.cursor = max(0, min(len(self.lines) - 1, self.cursor + delta))
+        height = max_y - 3
+        if self.cursor < self.scroll:
+            self.scroll = self.cursor
+        elif self.cursor >= self.scroll + height:
+            self.scroll = self.cursor - height + 1
+
+    # -- anchors ----------------------------------------------------------
+    def _add_anchor(self, stdscr) -> None:
+        lo, hi = self.selection()
+        first = self.lines[lo]
+        quote = [self.lines[i].raw_text for i in range(lo, hi + 1)]
+        name, slug = self.section_at(lo)
+        text = self._ask(stdscr, f"comment L{first.line_number} (empty → $EDITOR): ")
+        if not text:
+            text = self._edit_text(stdscr, "", "comment.md")
+        if not text.strip():
+            self.status = "cancelled"
+            return
+        self.exchange.anchors.append(
+            Anchor(
+                path=self.doc_rel,
+                line=first.line_number,
+                count=hi - lo + 1,
+                slug=slug,
+                quote=quote,
+                comment=text.strip(),
+            )
+        )
+        self.exchange.meta.setdefault("doc", self.doc_rel)
+        self.exchange.meta["doc-rev"] = blob_rev(self.plan_path)
+        self.mark = None
+        self.save_exchange()
+        self.tab = 3
+        self.status = f"anchored L{first.line_number}" + (f"-{self.lines[hi].line_number}" if hi > lo else "")
+
+    def _delete_anchor(self) -> None:
+        lo, hi = self.selection()
+        nums = {self.lines[i].line_number for i in range(lo, hi + 1)}
+        mine = (self.doc_rel, os.path.basename(self.doc_rel))
+
+        def hits(anchor) -> bool:
+            lo_a, hi_a = anchor.span
+            return anchor.path in mine and bool(nums & set(range(lo_a, hi_a + 1)))
+
+        before = len(self.exchange.anchors)
+        self.exchange.anchors = [a for a in self.exchange.anchors if not hits(a)]
+        self.save_exchange()
+        self.status = f"removed {before - len(self.exchange.anchors)} anchor(s)"
+
+    def _verify(self) -> None:
+        raw = self.raw_lines()
+        moved = stale = 0
+        for a in self.exchange.anchors_for(self.doc_rel):
+            if a.matches(raw):
+                continue
+            found = a.relocate(raw)
+            if found:
+                a.line = found
+                _, a.slug = self.section_at(found - 1)
+                moved += 1
+            else:
+                stale += 1
+        self.exchange.meta["doc-rev"] = blob_rev(self.plan_path)
+        self.save_exchange()
+        self.status = f"verified: {moved} relocated, {stale} lost, {len(self.exchange.anchors)} total"
+
+    # -- navigation helpers ----------------------------------------------
+    def _paste_jump(self) -> None:
         clip = Clipboard.get_text().strip()
         if not clip:
-            self.status_message = "Clipboard is empty."
+            self.status = "clipboard empty"
             return
+        needle = clip.splitlines()[0].strip().lower()
+        for idx, line in enumerate(self.lines):
+            if needle and needle in line.raw_text.lower():
+                self.cursor, self.scroll = idx, max(0, idx - 3)
+                self.status = f"jumped to L{line.line_number}"
+                return
+        self.status = f"no match for {needle[:30]!r}"
 
-        target_line = None
-        cleaned_clip = clip.lower()
+    def _goto_line(self, stdscr) -> None:
+        val = self._ask(stdscr, "goto line: ")
+        if val.isdigit():
+            want = int(val)
+            for idx, line in enumerate(self.lines):
+                if line.line_number == want:
+                    self.cursor, self.scroll = idx, max(0, idx - 3)
+                    return
 
-        if clip.isdigit():
-            target_num = int(clip)
-            for idx, mline in enumerate(self.markdown_lines):
-                if mline.line_number == target_num:
-                    target_line = idx
-                    break
-        else:
-            for idx, mline in enumerate(self.markdown_lines):
-                if cleaned_clip in mline.raw_text.lower():
-                    target_line = idx
-                    break
-
-        if target_line is not None:
-            self.selected_line_idx = target_line
-            self.scroll_offset = max(0, target_line - 3)
-            self.status_message = f"Jumped to line matching: '{clip[:25]}...'"
-        else:
-            self.status_message = f"No match for: '{clip[:25]}...'"
-
-    def _handle_git_commit(self, stdscr):
-        msg = self.git_anchor.format_commit_message()
-        mode_desc = "Temporary / Model-Only" if self.git_anchor.commit_mode == "model_only" else "Detailed Review"
-        confirm_str = f"Create git commit [{mode_desc}] with message '{msg[:30]}'? (y/n): "
-
+    # -- editor / input ---------------------------------------------------
+    def _ask(self, stdscr, prompt: str) -> str:
         max_y, max_x = stdscr.getmaxyx()
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, confirm_str[:max_x - 1], curses.A_BOLD)
-        ch = stdscr.getch()
+        curses.echo()
+        curses.curs_set(1)
+        stdscr.addstr(max_y - 1, 0, " " * (max_x - 1))
+        stdscr.addstr(max_y - 1, 0, prompt[: max_x - 2], curses.A_BOLD)
+        try:
+            return stdscr.getstr().decode("utf-8", "replace").strip()
+        except Exception:
+            return ""
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
 
-        if ch in (ord('y'), ord('Y')):
-            ok, result = self.git_anchor.execute_commit()
-            self.status_message = result
-        else:
-            self.status_message = "Cancelled."
+    def _run_editor(self, stdscr, path: str) -> None:
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+        curses.endwin()
+        try:
+            subprocess.call(f'{editor} "{path}"', shell=True)
+        finally:
+            stdscr.clear()
+            curses.flushinp()
+            stdscr.refresh()
 
-    def _show_help_dialog(self, stdscr):
-        max_y, max_x = stdscr.getmaxyx()
-        help_lines = [
-            "  Review Anchor - Help & Keybindings",
-            "──────────────────────────────────────────────",
-            "  j / ↓         : Move down 1 line",
-            "  k / ↑         : Move up 1 line",
-            "  PgDn / PgUp   : Page down / Page up",
-            "  c / Enter     : Add/edit review comment for selected line",
-            "  d / x         : Delete comment on selected line",
-            "  p             : Paste from clipboard & jump to matching text",
-            "  m             : Configure model name (e.g. 'gemini 3.8 flash high')",
-            "  t             : Toggle commit mode ('model_only' vs 'detailed')",
-            "  + / -         : Adjust column wrap width (match IDE line breaks)",
-            "  Tab / s       : Toggle side-by-side split pane",
-            "  y             : Copy formatted commit message to clipboard",
-            "  G             : Run git commit",
-            "  ?             : Show this help window",
-            "  q / Esc       : Quit",
+    def _edit_file(self, stdscr, path: Optional[str]) -> None:
+        if path:
+            self._run_editor(stdscr, path)
+
+    def _edit_text(self, stdscr, initial: str, name: str) -> str:
+        fd, path = tempfile.mkstemp(suffix="-" + name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(initial)
+            self._run_editor(stdscr, path)
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read().strip()
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    # -- commit -----------------------------------------------------------
+    def _commit(self, stdscr) -> None:
+        if not self.exchange.prompt.strip() and not self.config["bare_commit"]:
+            self.status = "prompt is empty (P to write one, b for a bare commit)"
+            return
+        self.exchange.meta["state"] = "closed"
+        self.exchange.meta.setdefault("date", now_stamp())
+        self.save_exchange()
+        msg = self.commit_message()
+        ans = self._ask(stdscr, f"commit {msg.splitlines()[0][:40]!r} ? [y/N] ")
+        if ans.lower() not in ("y", "yes"):
+            self.exchange.meta["state"] = "open"
+            self.save_exchange()
+            self.status = "cancelled"
+            return
+        ok, out = self.git.commit(msg)
+        self.status = out if ok else f"failed: {out}"
+        if ok:
+            self.exchange = self.store.create(model=self.exchange.model, doc=self.doc_rel)
+
+    # -- rendering --------------------------------------------------------
+    def _draw_doc(self, stdscr, height: int, width: int) -> None:
+        num = self.store.number_of(self.exchange) or 0
+        branch = self.git.current_branch()
+        tag, at_tag = self.git.tag_info()
+        stale = " ⚠doc changed" if self.doc_is_stale() else ""
+        header = (
+            f" {os.path.basename(self.plan_path)} "
+            f"L{self.lines[self.cursor].line_number if self.lines else 0} "
+            f"│ {branch}→{self.git.default_branch()} "
+            f"│ {num:04d} {self.exchange.state} "
+            f"│ pending-push {tag or '-'}{'*' if at_tag else ''}{stale} "
+        )
+        stdscr.addstr(0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
+
+        anchored = self.anchored_lines()
+        lo, hi = self.selection()
+        row = 1
+        for idx in range(self.scroll, len(self.lines)):
+            if row >= height:
+                break
+            line = self.lines[idx]
+            selected = lo <= idx <= hi
+            for text, attr, _ in WysiwygRenderer.format_line(
+                line,
+                wrap_width=min(self.wrap_width, width - 2),
+                has_comment=line.line_number in anchored,
+                is_selected=selected,
+            ):
+                if row >= height:
+                    break
+                body = text.ljust(width)[:width]
+                if selected:
+                    marker = "▶" if idx == self.cursor else "┃"
+                    stdscr.addstr(row, 0, (marker + body[1:])[:width], curses.color_pair(WysiwygRenderer.COLOR_ACTIVE_LINE))
+                else:
+                    stdscr.addstr(row, 0, body, attr)
+                row += 1
+
+    def _pane_text(self) -> List[str]:
+        tab = TABS[self.tab]
+        if tab == "commit":
+            return self.commit_message().splitlines()
+        if tab == "prompt":
+            return (self.exchange.compose_prompt() or "(empty — P to write)").splitlines()
+        if tab == "response":
+            return (self.exchange.response or "(empty — R pastes the clipboard)").splitlines()
+        out: List[str] = []
+        for a in self.exchange.anchors:
+            out.append(a.header())
+            out += [f"> {q}" for q in a.quote]
+            out += a.comment.splitlines()
+            out.append("")
+        return out or ["(no anchors — c on a line)"]
+
+    def _draw_pane(self, stdscr, height: int, x: int, width: int) -> None:
+        for y in range(height):
+            stdscr.addstr(y, x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
+        labels = " ".join(
+            f"{i + 1}·{name}" + ("◂" if i == self.tab else " ") for i, name in enumerate(TABS)
+        )
+        mode = "bare" if self.config["bare_commit"] else "full"
+        stdscr.addstr(0, x, f" {labels} [{mode}] ".ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
+
+        body = self._pane_text()
+        self.pane_scroll = max(0, min(self.pane_scroll, max(0, len(body) - 1)))
+        row = 1
+        import textwrap
+
+        for raw in body[self.pane_scroll :]:
+            for piece in textwrap.wrap(raw, width=width - 1) or [""]:
+                if row >= height:
+                    return
+                if raw.startswith("@@"):
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_IMPORTANT) | curses.A_BOLD
+                elif raw.startswith(">"):
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_NOTE)
+                elif raw.split(":")[0] in ("Review-Doc", "Review-Log", "Reviewed-By", "Claude-Session", "Co-Authored-By"):
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_GUTTER)
+                elif row == 1:
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_HEADING1) | curses.A_BOLD
+                else:
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_DEFAULT)
+                stdscr.addstr(row, x, piece.ljust(width)[:width], attr)
+                row += 1
+
+    def _draw_status(self, stdscr, y: int, width: int) -> None:
+        try:
+            stdscr.addstr(y, 0, f" {self.status} ".ljust(width)[: width - 1], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR))
+        except curses.error:
+            pass
+
+    def _help(self, stdscr) -> None:
+        text = [
+            "  Review Anchor",
+            "  ─────────────────────────────────────────────────────────",
+            "  j k ↑ ↓ PgUp PgDn g G   move        # goto line",
+            "  v            toggle range mark (anchor several lines)",
+            "  c / Enter    comment on the line or range (empty → $EDITOR)",
+            "  d / x        drop anchors on the line or range",
+            "  V            verify anchors, relocate ones the doc moved",
+            "  p            paste from clipboard and jump to the match",
             "",
-            "  Bookmark Note:",
-            "  'pending-push' is preserved as an immutable example bookmark.",
+            "  P            edit the prompt in $EDITOR",
+            "  r            edit the response in $EDITOR",
+            "  R            replace the response from the clipboard",
+            "  e            edit the whole exchange file in $EDITOR",
+            "  y            copy prompt + anchors  (paste this to the model)",
+            "  Y            copy the rendered commit message",
             "",
-            "Press any key to close help."
+            "  m s          set model label / commit subject",
+            "  b            toggle bare commit (subject only, pending-push)",
+            "  n [ ]        new exchange / previous / next",
+            "  C            git add -A && git commit",
+            "",
+            "  1 2 3 4      pane: commit · prompt · response · anchors",
+            "  J K          scroll the pane      Tab  toggle split",
+            "  + -          wrap width (match the IDE's line breaks)",
+            "  ? q          this help / quit",
+            "",
+            "  No model API is called; prompts and responses move by clipboard.",
+            "  Press any key.",
         ]
-
-        box_h = len(help_lines) + 2
-        box_w = max(len(l) for l in help_lines) + 4
-        start_y = max(1, (max_y - box_h) // 2)
-        start_x = max(1, (max_x - box_w) // 2)
-
-        win = curses.newwin(box_h, box_w, start_y, start_x)
+        max_y, max_x = stdscr.getmaxyx()
+        h, w = min(len(text) + 2, max_y), min(max(len(l) for l in text) + 4, max_x)
+        win = curses.newwin(h, w, max(0, (max_y - h) // 2), max(0, (max_x - w) // 2))
         win.box()
-        for idx, l in enumerate(help_lines):
-            win.addstr(idx + 1, 2, l[:box_w - 4], curses.A_BOLD if idx < 2 else curses.A_NORMAL)
+        for i, line in enumerate(text[: h - 2]):
+            win.addstr(i + 1, 2, line[: w - 4], curses.A_BOLD if i < 2 else curses.A_NORMAL)
         win.refresh()
         win.getch()
