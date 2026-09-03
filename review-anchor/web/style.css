@@ -599,3 +599,109 @@ body {
   gap: 8px;
   margin-top: 8px;
 }
+
+/* Claude Code Q/A Styles */
+.qa-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.helper-text-inline {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
+}
+
+.qa-input-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qa-input-card input,
+.qa-input-card textarea {
+  width: 100%;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+.qa-input-card input:focus,
+.qa-input-card textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.qa-btn-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.qa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qa-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid #38bdf8;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+}
+
+.qa-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.qa-q {
+  font-weight: 600;
+  color: #38bdf8;
+  margin-bottom: 2px;
+}
+
+.qa-a {
+  color: var(--text-primary);
+}
+
+/* Notes Preview Styles */
+.notes-preview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.notes-box {
+  border-color: rgba(56, 189, 248, 0.3);
+  background-color: #0f172a;
+}
+
+.ref-badge {
+  background-color: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: Menlo, monospace;
+}
+

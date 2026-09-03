@@ -125,6 +125,8 @@ class ReviewAnchorTUI:
                 self.status_message = f"Adjusted wrap width to {self.wrap_width} cols"
             elif key in (ord('\t'), ord('s')):
                 self.show_split_pane = not self.show_split_pane
+            elif key in (ord('a'), ord('A')):
+                self._handle_add_qa(stdscr)
             elif key in (ord('c'), ord('\n'), 10, 13):
                 self._handle_add_comment(stdscr)
             elif key in (ord('d'), ord('x')):
@@ -146,6 +148,14 @@ class ReviewAnchorTUI:
                     self.status_message = f"✓ Copied commit message [{self.git_anchor.commit_mode}] to macOS clipboard!"
                 else:
                     self.status_message = "Failed to copy to clipboard."
+            elif key in (ord('n'), ord('N')):
+                notes = self.git_anchor.format_git_notes()
+                if notes and Clipboard.set_text(notes):
+                    self.status_message = "✓ Copied Git Notes (diff -p context) to macOS clipboard!"
+                elif not notes:
+                    self.status_message = "No Git Notes to copy."
+                else:
+                    self.status_message = "Failed to copy Git Notes."
             elif key in (ord('g'), ord('G')):
                 self._handle_git_commit(stdscr)
             elif key == ord('?'):
@@ -170,12 +180,16 @@ class ReviewAnchorTUI:
             mline = self.markdown_lines[idx]
             is_selected = (idx == self.selected_line_idx)
             has_comment = (mline.line_number in self.git_anchor.comments)
+            ref_id = None
+            if has_comment and self.git_anchor.comments[mline.line_number]:
+                ref_id = self.git_anchor.comments[mline.line_number][0].ref_id
 
             rendered_rows = WysiwygRenderer.format_line(
                 mline,
                 wrap_width=min(self.wrap_width, width - 2),
                 has_comment=has_comment,
-                is_selected=is_selected
+                is_selected=is_selected,
+                ref_id=ref_id
             )
 
             for text, attr, lnum in rendered_rows:
@@ -193,7 +207,7 @@ class ReviewAnchorTUI:
         for y in range(max_y):
             stdscr.addstr(y, start_x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
 
-        mode_badge = "[MODEL-ONLY: pending-push]" if self.git_anchor.commit_mode == "model_only" else "[DETAILED + NOTES]"
+        mode_badge = "[MODEL-ONLY: pending-push]" if self.git_anchor.commit_mode == "model_only" else "[MODEL INPUT + DIFF -P NOTES]"
         title = f" COMMIT & REVIEW ({mode_badge}) "
         stdscr.addstr(0, start_x, title.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
@@ -201,13 +215,19 @@ class ReviewAnchorTUI:
         lines = commit_msg.splitlines()
 
         row_y = 1
+        commit_hdr = "── Commit Message (Model Input Snapshot) ──"
+        stdscr.addstr(row_y, start_x, commit_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER))
+        row_y += 1
+
         for line in lines:
-            if row_y >= max_y - 4:
+            if row_y >= max_y - 6:
                 break
-            if line.startswith("gemini") or line.startswith("Review-"):
+            if line.startswith("gemini") or line.startswith("claude") or line.startswith("Review-"):
                 attr = curses.color_pair(WysiwygRenderer.COLOR_HEADING1) | curses.A_BOLD
-            elif line.startswith("[Line"):
+            elif line.startswith("[Ref"):
                 attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_IMPORTANT) | curses.A_BOLD
+            elif line.startswith("Q:") or line.startswith("A:"):
+                attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_TIP)
             elif line.startswith("> "):
                 attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_NOTE)
             else:
@@ -216,15 +236,23 @@ class ReviewAnchorTUI:
             stdscr.addstr(row_y, start_x, line.ljust(width)[:width], attr)
             row_y += 1
 
-        # Show Git Notes preview if in model_only mode and comments exist
-        if self.git_anchor.commit_mode == "model_only" and self.git_anchor.comments:
-            notes_hdr = "── Git Notes (Attached to Commit) ──"
-            stdscr.addstr(row_y, start_x, notes_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER))
+        # Show Git Notes preview (diff -p context)
+        notes_str = self.git_anchor.format_git_notes()
+        if notes_str and row_y < max_y - 2:
             row_y += 1
-            for n_line in self.git_anchor.format_review_body().splitlines():
+            notes_hdr = "── Git Notes (diff -p Context Anchors) ──"
+            stdscr.addstr(row_y, start_x, notes_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER) | curses.A_BOLD)
+            row_y += 1
+            for n_line in notes_str.splitlines():
                 if row_y >= max_y:
                     break
-                stdscr.addstr(row_y, start_x, n_line.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_GUTTER))
+                if n_line.startswith("[Ref"):
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_ALERT_IMPORTANT) | curses.A_BOLD
+                elif n_line.startswith("Context:"):
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_HEADING2)
+                else:
+                    attr = curses.color_pair(WysiwygRenderer.COLOR_GUTTER)
+                stdscr.addstr(row_y, start_x, n_line.ljust(width)[:width], attr)
                 row_y += 1
 
     def _render_status_bar(self, stdscr, y: int, width: int):
@@ -335,6 +363,54 @@ class ReviewAnchorTUI:
         else:
             self.status_message = "Cancelled."
 
+    def _handle_add_qa(self, stdscr):
+        curses.echo()
+        curses.curs_set(1)
+        max_y, max_x = stdscr.getmaxyx()
+
+        # 1. Prompt for Question
+        q_prompt = "Claude Code Question: "
+        stdscr.addstr(max_y - 1, 0, " " * max_x)
+        stdscr.addstr(max_y - 1, 0, q_prompt[:max_x - 1], curses.A_BOLD)
+        try:
+            q_text = stdscr.getstr(max_y - 1, min(len(q_prompt), max_x - 5)).decode("utf-8").strip()
+        except Exception:
+            q_text = ""
+
+        if not q_text:
+            curses.noecho()
+            curses.curs_set(0)
+            self.status_message = "Q/A cancelled (empty question)."
+            return
+
+        # 2. Prompt for Answer / Instruction
+        a_prompt = "Claude Code Answer / Instruction: "
+        stdscr.addstr(max_y - 1, 0, " " * max_x)
+        stdscr.addstr(max_y - 1, 0, a_prompt[:max_x - 1], curses.A_BOLD)
+        try:
+            a_text = stdscr.getstr(max_y - 1, min(len(a_prompt), max_x - 5)).decode("utf-8").strip()
+        except Exception:
+            a_text = ""
+
+        curses.noecho()
+        curses.curs_set(0)
+
+        curr_line = self.markdown_lines[self.selected_line_idx] if self.markdown_lines else None
+        sec_name, _ = self._get_current_section()
+        line_num = curr_line.line_number if curr_line else None
+
+        qa = self.git_anchor.add_qa(
+            question=q_text,
+            answer=a_text,
+            section_name=sec_name,
+            line_number=line_num
+        )
+        if qa:
+            ref_str = f" [Ref {qa.ref_id}]" if qa.ref_id else ""
+            self.status_message = f"✓ Added Claude Code Q/A{ref_str}!"
+        else:
+            self.status_message = "Failed to add Q/A."
+
     def _show_help_dialog(self, stdscr):
         max_y, max_x = stdscr.getmaxyx()
         help_lines = [
@@ -343,6 +419,7 @@ class ReviewAnchorTUI:
             "  j / ↓         : Move down 1 line",
             "  k / ↑         : Move up 1 line",
             "  PgDn / PgUp   : Page down / Page up",
+            "  a             : Add Claude Code Q/A item (prompt snapshot)",
             "  c / Enter     : Add/edit review comment for selected line",
             "  d / x         : Delete comment on selected line",
             "  p             : Paste from clipboard & jump to matching text",
@@ -351,7 +428,8 @@ class ReviewAnchorTUI:
             "  + / -         : Adjust column wrap width (match IDE line breaks)",
             "  Tab / s       : Toggle side-by-side split pane",
             "  y             : Copy formatted commit message to clipboard",
-            "  G             : Run git commit",
+            "  n             : Copy Git Notes (diff -p context) to clipboard",
+            "  G             : Run git commit (attaches Git Notes automatically)",
             "  ?             : Show this help window",
             "  q / Esc       : Quit",
             "",

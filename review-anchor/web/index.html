@@ -99,6 +99,22 @@
             <textarea id="generalPrompt" rows="2" placeholder="Overall review guidance or approval notes..."></textarea>
           </div>
 
+          <!-- Claude Code Q/A Context (Model Input Snapshot) -->
+          <div class="qa-section" id="qaSection">
+            <div class="section-title-row">
+              <h3>Claude Code Q/A Context (<span id="qaCount">0</span>)</h3>
+              <button class="btn-text" id="clearQaBtn">Clear Q/A</button>
+            </div>
+            <div class="qa-input-card">
+              <input type="text" id="qaQuestion" placeholder="Claude Question (e.g. How to handle orientation tilt?)...">
+              <textarea id="qaAnswer" rows="2" placeholder="Claude Answer / Instruction prompt..."></textarea>
+              <div class="qa-btn-row">
+                <button type="button" class="btn btn-sm btn-primary" id="addQaBtn">+ Add Q/A Prompt</button>
+              </div>
+            </div>
+            <div id="qaList" class="qa-list"></div>
+          </div>
+
           <!-- Anchored comments list -->
           <div class="comments-section">
             <div class="section-title-row">
@@ -110,16 +126,33 @@
             </div>
           </div>
 
-          <!-- Generated Git Commit Message Preview -->
+          <!-- Generated Git Commit Message Preview (Model Input Snapshot) -->
           <div class="commit-preview-section">
             <div class="preview-header">
-              <h3>Commit Message Preview</h3>
+              <div>
+                <h3>Commit Message</h3>
+                <small class="helper-text-inline">Model Input Snapshot (Prompt + Q/A + [Ref N] Comments)</small>
+              </div>
               <div class="action-buttons-row">
-                <button class="btn btn-sm" id="copyPreviewBtn">Copy</button>
+                <button class="btn btn-sm" id="copyPreviewBtn">Copy Commit</button>
                 <button class="btn btn-sm btn-primary" id="commitBtn">Create Commit</button>
               </div>
             </div>
             <pre class="commit-preview-box" id="commitPreviewBox"></pre>
+          </div>
+
+          <!-- Git Notes Preview (diff -p Context Anchors) -->
+          <div class="notes-preview-section">
+            <div class="preview-header">
+              <div>
+                <h3>Git Notes (Rebase / OT Tolerant Anchors)</h3>
+                <small class="helper-text-inline">Attaches [Ref N] to diff -p Hunk Context</small>
+              </div>
+              <div class="action-buttons-row">
+                <button class="btn btn-sm" id="copyNotesBtn">Copy Notes</button>
+              </div>
+            </div>
+            <pre class="commit-preview-box notes-box" id="notesPreviewBox"></pre>
           </div>
         </div>
       </section>

@@ -1,7 +1,7 @@
 """
 Zero-dependency local HTTP server for Review Anchor Web GUI.
 Serves static assets and provides REST API for plan data, git status,
-pending-push tag management, and comment persistence.
+Claude Code Q/A context, and rebase-tolerant diff -p Git Notes.
 """
 
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -53,6 +53,19 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
 
             tag_hash, is_at_tag = git_anchor.get_pending_push_info()
 
+            qa_items = [
+                {
+                    "ref_id": q.ref_id,
+                    "question": q.question,
+                    "answer": q.answer,
+                    "section_name": q.section_name,
+                    "diff_context": q.diff_context,
+                    "context_snippet": q.context_snippet,
+                    "timestamp": q.timestamp
+                }
+                for q in git_anchor.get_qa_items()
+            ]
+
             data = {
                 "filename": os.path.basename(self.plan_path),
                 "model_header": git_anchor.model_header,
@@ -62,7 +75,9 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 "default_branch": git_anchor.get_default_branch(),
                 "pending_push_hash": tag_hash,
                 "is_at_pending_push": is_at_tag,
-                "lines": lines
+                "lines": lines,
+                "qa_items": qa_items,
+                "git_notes_preview": git_anchor.format_git_notes()
             }
             self.wfile.write(json.dumps(data).encode("utf-8"))
             return
@@ -75,17 +90,41 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
             git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
             comments = [
                 {
+                    "ref_id": c.ref_id,
                     "line_number": c.line_number,
                     "line_text": c.line_text,
                     "section_name": c.section_name,
                     "section_slug": c.section_slug,
                     "comment_text": c.comment_text,
+                    "diff_context": c.diff_context,
+                    "context_snippet": c.context_snippet,
                     "timestamp": c.timestamp,
                     "author": c.author
                 }
                 for c in git_anchor.get_comments()
             ]
             self.wfile.write(json.dumps(comments).encode("utf-8"))
+            return
+
+        elif self.path == "/api/qa":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+
+            git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
+            qa_items = [
+                {
+                    "ref_id": q.ref_id,
+                    "question": q.question,
+                    "answer": q.answer,
+                    "section_name": q.section_name,
+                    "diff_context": q.diff_context,
+                    "context_snippet": q.context_snippet,
+                    "timestamp": q.timestamp
+                }
+                for q in git_anchor.get_qa_items()
+            ]
+            self.wfile.write(json.dumps(qa_items).encode("utf-8"))
             return
 
         return super().do_GET()
@@ -99,7 +138,7 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 comments_list = json.loads(post_data)
                 git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
                 git_anchor.comments.clear()
-                
+
                 for item in comments_list:
                     mline = MarkdownLine(
                         line_number=item["line_number"],
@@ -110,8 +149,47 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                         line=mline,
                         comment_text=item.get("comment_text", ""),
                         section_name=item.get("section_name", ""),
-                        section_slug=item.get("section_slug", "")
+                        section_slug=item.get("section_slug", ""),
+                        diff_context=item.get("diff_context", ""),
+                        context_snippet=item.get("context_snippet", "")
                     )
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status": "ok"}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+
+        elif self.path == "/api/qa":
+            try:
+                body = json.loads(post_data)
+                git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
+
+                if isinstance(body, dict):
+                    action = body.get("action")
+                    if action == "delete":
+                        idx = int(body.get("index", -1))
+                        git_anchor.remove_qa(idx)
+                    elif action == "clear":
+                        git_anchor.clear_qa()
+                    else:
+                        q_text = body.get("question", "")
+                        a_text = body.get("answer", "")
+                        sec = body.get("section_name", "")
+                        lnum = body.get("line_number")
+                        git_anchor.add_qa(question=q_text, answer=a_text, section_name=sec, line_number=lnum)
+                elif isinstance(body, list):
+                    git_anchor.clear_qa()
+                    for item in body:
+                        git_anchor.add_qa(
+                            question=item.get("question", ""),
+                            answer=item.get("answer", ""),
+                            section_name=item.get("section_name", "")
+                        )
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -137,6 +215,29 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(b'{"status": "ok"}')
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode("utf-8"))
+            return
+
+        elif self.path == "/api/preview":
+            try:
+                body = json.loads(post_data) if post_data else {}
+                git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
+                prompt = body.get("prompt", "")
+                mode = body.get("mode", git_anchor.commit_mode)
+
+                commit_msg = git_anchor.format_commit_message(general_prompt=prompt, mode=mode)
+                notes_msg = git_anchor.format_git_notes()
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "commit_message": commit_msg,
+                    "git_notes": notes_msg
+                }).encode("utf-8"))
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()

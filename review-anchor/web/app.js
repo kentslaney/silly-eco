@@ -2,9 +2,10 @@
 
 let documentLines = [];
 let reviewComments = [];
+let qaItems = [];
 let activeLineForComment = null;
 let currentPlanFilename = "implementation_plan.md";
-let activeCommitMode = "model_only";
+let activeCommitMode = "detailed";
 
 // DOM Elements
 const docContent = document.getElementById("docContent");
@@ -23,10 +24,20 @@ const generalPrompt = document.getElementById("generalPrompt");
 const commentsList = document.getElementById("commentsList");
 const commentCount = document.getElementById("commentCount");
 const commitPreviewBox = document.getElementById("commitPreviewBox");
+const notesPreviewBox = document.getElementById("notesPreviewBox");
 const copyCommitBtn = document.getElementById("copyCommitBtn");
 const copyPreviewBtn = document.getElementById("copyPreviewBtn");
+const copyNotesBtn = document.getElementById("copyNotesBtn");
 const commitBtn = document.getElementById("commitBtn");
 const clearCommentsBtn = document.getElementById("clearCommentsBtn");
+
+// Claude Code Q/A DOM
+const qaCount = document.getElementById("qaCount");
+const qaQuestion = document.getElementById("qaQuestion");
+const qaAnswer = document.getElementById("qaAnswer");
+const addQaBtn = document.getElementById("addQaBtn");
+const clearQaBtn = document.getElementById("clearQaBtn");
+const qaList = document.getElementById("qaList");
 
 // Mode radios
 const modeModelOnly = document.getElementById("modeModelOnly");
@@ -87,9 +98,14 @@ function setupEventListeners() {
   });
   generalPrompt.addEventListener("input", updateCommitPreview);
 
+  // Claude Code Q/A Events
+  addQaBtn.addEventListener("click", handleAddQa);
+  clearQaBtn.addEventListener("click", handleClearQa);
+
   // Copy Buttons
   copyCommitBtn.addEventListener("click", copyCommitMessage);
   copyPreviewBtn.addEventListener("click", copyCommitMessage);
+  copyNotesBtn.addEventListener("click", copyNotesMessage);
 
   // Git Action
   commitBtn.addEventListener("click", handleCommit);
@@ -114,10 +130,10 @@ function setCommitMode(mode) {
   activeCommitMode = mode;
   if (mode === "model_only") {
     modeModelOnly.checked = true;
-    modeExplanation.textContent = "Commit message will be strictly the model name. Review anchors are attached via Git Notes.";
+    modeExplanation.textContent = "Commit message will be strictly the model name (as in pending-push). Review anchors attach to Git Notes.";
   } else {
     modeDetailed.checked = true;
-    modeExplanation.textContent = "Commit message includes model name, user review prompt, line quotes, and RFC 822 review trailers.";
+    modeExplanation.textContent = "Commit message includes snapshot of model input (prompt, Q/A, [Ref N] comments). Git Notes store diff -p anchors.";
   }
   syncConfig();
   updateCommitPreview();
@@ -128,6 +144,7 @@ async function loadData() {
     const res = await fetch("/api/plan");
     const data = await res.json();
     documentLines = data.lines || [];
+    qaItems = data.qa_items || [];
     currentPlanFilename = data.filename || "implementation_plan.md";
     planFilename.textContent = currentPlanFilename;
     lineCountLabel.textContent = `${documentLines.length} lines`;
@@ -155,7 +172,8 @@ async function loadData() {
 
     renderDocument();
     renderComments();
-    updateCommitPreview();
+    renderQa();
+    await updateCommitPreview();
   } catch (err) {
     console.error("Failed to load plan data:", err);
   }
@@ -178,7 +196,10 @@ async function syncConfig() {
 
 function renderDocument() {
   docContent.innerHTML = "";
-  const commentedLineNumbers = new Set(reviewComments.map(c => c.line_number));
+  const commentMap = new Map();
+  reviewComments.forEach(c => {
+    commentMap.set(c.line_number, c);
+  });
 
   documentLines.forEach((item, idx) => {
     const lineEl = document.createElement("div");
@@ -186,7 +207,8 @@ function renderDocument() {
     lineEl.dataset.lineNum = item.line_number;
     lineEl.dataset.idx = idx;
 
-    if (commentedLineNumbers.has(item.line_number)) {
+    const existingComment = commentMap.get(item.line_number);
+    if (existingComment) {
       lineEl.classList.add("has-comment");
     }
 
@@ -198,44 +220,54 @@ function renderDocument() {
     content.className = "line-content";
 
     if (item.line_type === "heading") {
-      lineEl.classList.add(`line-h${item.heading_level}`);
+      const hClass = item.heading_level === 1 ? "md-h1" : (item.heading_level === 2 ? "md-h2" : "md-h3");
+      content.classList.add("md-heading", hClass);
       content.textContent = item.raw_text;
     } else if (item.line_type === "alert") {
-      lineEl.classList.add("line-alert", `alert-${item.alert_type}`);
-      const badge = document.createElement("span");
-      badge.className = "alert-badge";
-      badge.textContent = `[!${item.alert_type}]`;
-      content.appendChild(badge);
-      content.appendChild(document.createTextNode(" " + (item.alert_body || item.raw_text)));
-    } else if (item.line_type === "code_body" || item.line_type === "code_fence") {
-      content.classList.add("line-code");
+      content.classList.add("md-alert", `alert-${(item.alert_type || 'note').toLowerCase()}`);
+      content.innerHTML = `<strong>[!${item.alert_type}]</strong> ${escapeHtml(item.alert_body || item.raw_text)}`;
+    } else if (item.line_type === "code_fence" || item.line_type === "code_body") {
+      content.classList.add("md-code");
       content.textContent = item.raw_text;
     } else if (item.line_type === "horizontal_rule") {
-      content.classList.add("line-hr");
+      content.classList.add("md-hr");
+    } else if (item.line_type === "blank") {
+      content.classList.add("md-blank");
+      content.innerHTML = "&nbsp;";
     } else {
-      content.textContent = item.raw_text || "\u00A0";
+      content.textContent = item.raw_text;
     }
 
-    if (commentedLineNumbers.has(item.line_number)) {
-      const count = reviewComments.filter(c => c.line_number === item.line_number).length;
-      const pill = document.createElement("span");
-      pill.className = "line-comment-pill";
-      pill.textContent = `★ ${count}`;
-      content.appendChild(pill);
+    if (existingComment) {
+      const badge = document.createElement("span");
+      badge.className = "badge-comment";
+      badge.textContent = `★ Ref ${existingComment.ref_id || '1'}`;
+      content.appendChild(badge);
     }
 
     lineEl.appendChild(gutter);
     lineEl.appendChild(content);
+
     lineEl.addEventListener("click", () => openCommentModal(item));
+
     docContent.appendChild(lineEl);
   });
 }
 
-function openCommentModal(item) {
-  activeLineForComment = item;
-  modalTitle.textContent = `Anchor Comment on Line ${item.line_number}`;
-  modalSnippet.textContent = item.raw_text ? `"${item.raw_text}"` : "(empty line)";
-  modalCommentInput.value = "";
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function openCommentModal(lineItem) {
+  activeLineForComment = lineItem;
+  modalTitle.textContent = `Anchor Review Comment - Line ${lineItem.line_number}`;
+  modalSnippet.textContent = lineItem.raw_text.trim() || "(blank line)";
+
+  const existing = reviewComments.find(c => c.line_number === lineItem.line_number);
+  modalCommentInput.value = existing ? existing.comment_text : "";
+
   commentDialog.showModal();
   modalCommentInput.focus();
 }
@@ -249,27 +281,31 @@ async function handleSaveComment() {
 
   let secName = "";
   let secSlug = "";
-  for (let i = activeLineForComment.line_number - 1; i >= 0; i--) {
+  const curIdx = parseInt(activeLineForComment.line_number, 10);
+  for (let i = curIdx - 1; i >= 0; i--) {
     if (documentLines[i] && documentLines[i].line_type === "heading") {
-      secName = documentLines[i].raw_text.replace(/^#+\s*/, "");
-      secSlug = documentLines[i].heading_slug || "section";
+      secName = documentLines[i].raw_text.replace(/^#+\s*/, "").trim();
+      secSlug = documentLines[i].heading_slug || "";
       break;
     }
   }
 
-  reviewComments.push({
-    line_number: activeLineForComment.line_number,
-    line_text: activeLineForComment.raw_text,
-    section_name: secName,
-    section_slug: secSlug,
-    comment_text: commentText,
-    timestamp: new Date().toISOString()
-  });
+  const existingIdx = reviewComments.findIndex(c => c.line_number === activeLineForComment.line_number);
+  if (existingIdx >= 0) {
+    reviewComments[existingIdx].comment_text = commentText;
+  } else {
+    reviewComments.push({
+      line_number: activeLineForComment.line_number,
+      line_text: activeLineForComment.raw_text,
+      section_name: secName,
+      section_slug: secSlug,
+      comment_text: commentText,
+      timestamp: new Date().toISOString()
+    });
+  }
 
   await syncComments();
-  renderDocument();
-  renderComments();
-  updateCommitPreview();
+  await loadData();
   commentDialog.close();
 }
 
@@ -300,8 +336,9 @@ function renderComments() {
 
     const header = document.createElement("div");
     header.className = "comment-card-header";
-    header.innerHTML = `<span>Line ${c.line_number} ${c.section_name ? `(${c.section_name})` : ''}</span>`;
-    
+    const refTag = c.ref_id ? `<span class="ref-badge">Ref ${c.ref_id}</span> ` : "";
+    header.innerHTML = `<span>${refTag}Line ${c.line_number} ${c.section_name ? `(${c.section_name})` : ''}</span>`;
+
     const delBtn = document.createElement("button");
     delBtn.className = "delete-comment-btn";
     delBtn.textContent = "✕";
@@ -310,9 +347,7 @@ function renderComments() {
       e.stopPropagation();
       reviewComments.splice(idx, 1);
       await syncComments();
-      renderDocument();
-      renderComments();
-      updateCommitPreview();
+      await loadData();
     });
     header.appendChild(delBtn);
 
@@ -341,51 +376,106 @@ function renderComments() {
   });
 }
 
-function updateCommitPreview() {
-  const modelName = commitSubject.value.trim() || "gemini 3.8 flash high";
+// Claude Code Q/A logic
+async function handleAddQa() {
+  const q = qaQuestion.value.trim();
+  const a = qaAnswer.value.trim();
+  if (!q && !a) return;
 
-  if (activeCommitMode === "model_only") {
-    // Exact match to pending-push tag: JUST the configurable model name!
-    let preview = modelName;
-    if (reviewComments.length > 0) {
-      preview += `\n\n# Note: ${reviewComments.length} review anchor(s) will be recorded to Git Notes (keeping commit message clean).`;
-    }
-    commitPreviewBox.textContent = preview;
+  try {
+    await fetch("/api/qa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q, answer: a })
+    });
+    qaQuestion.value = "";
+    qaAnswer.value = "";
+    await loadData();
+  } catch (err) {
+    alert("Failed to add Q/A: " + err);
+  }
+}
+
+async function handleClearQa() {
+  if (!confirm("Clear all Claude Code Q/A items?")) return;
+  try {
+    await fetch("/api/qa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "clear" })
+    });
+    await loadData();
+  } catch (err) {
+    alert("Failed to clear Q/A: " + err);
+  }
+}
+
+function renderQa() {
+  qaCount.textContent = qaItems.length;
+  qaList.innerHTML = "";
+
+  if (qaItems.length === 0) {
+    qaList.innerHTML = `<div class="empty-state">No Q/A items added yet.</div>`;
     return;
   }
 
-  // Detailed mode
-  const prompt = generalPrompt.value.trim();
-  let bodyBlocks = [];
-  if (prompt) {
-    bodyBlocks.push(prompt);
-  }
+  qaItems.forEach((q, idx) => {
+    const card = document.createElement("div");
+    card.className = "qa-card";
 
-  if (reviewComments.length > 0) {
-    const entries = [];
-    entries.push(`Reviewed ${currentPlanFilename}:`);
+    const header = document.createElement("div");
+    header.className = "qa-card-header";
+    const refTag = q.ref_id ? `<span class="ref-badge">Ref ${q.ref_id}</span> ` : "";
+    header.innerHTML = `<span>${refTag}${q.section_name ? `(${q.section_name})` : 'Contextual Instruction'}</span>`;
 
-    reviewComments.forEach(c => {
-      const secInfo = c.section_name ? ` Section: "${c.section_name}"` : "";
-      const snippet = c.line_text ? `> "${c.line_text}"` : "";
-      entries.push(`[Line ${c.line_number}]${secInfo}\n${snippet}\nReview: ${c.comment_text}`);
+    const delBtn = document.createElement("button");
+    delBtn.className = "delete-comment-btn";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete Q/A";
+    delBtn.addEventListener("click", async () => {
+      await fetch("/api/qa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", index: idx })
+      });
+      await loadData();
     });
+    header.appendChild(delBtn);
 
-    bodyBlocks.push(entries.join("\n\n"));
+    const qEl = document.createElement("div");
+    qEl.className = "qa-q";
+    qEl.textContent = `Q: ${q.question}`;
 
-    const trailers = [];
-    trailers.push(`Review-Doc: ${currentPlanFilename}`);
-    const primarySlug = reviewComments[0].section_slug || `L${reviewComments[0].line_number}`;
-    trailers.push(`Review-Anchor: #${primarySlug}`);
-    trailers.push(`Reviewed-At: ${new Date().toISOString()}`);
-    bodyBlocks.push(trailers.join("\n"));
+    const aEl = document.createElement("div");
+    aEl.className = "qa-a";
+    aEl.textContent = `A: ${q.answer}`;
+
+    card.appendChild(header);
+    card.appendChild(qEl);
+    card.appendChild(aEl);
+    qaList.appendChild(card);
+  });
+}
+
+async function updateCommitPreview() {
+  const prompt = generalPrompt.value.trim();
+  try {
+    const res = await fetch("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: prompt,
+        mode: activeCommitMode
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      commitPreviewBox.textContent = data.commit_message || "";
+      notesPreviewBox.textContent = data.git_notes || "(No Git Notes anchors attached)";
+    }
+  } catch (err) {
+    console.error("Failed to update commit preview:", err);
   }
-
-  const fullMsg = bodyBlocks.length > 0
-    ? `${modelName}\n\n${bodyBlocks.join("\n\n")}`
-    : modelName;
-
-  commitPreviewBox.textContent = fullMsg;
 }
 
 function handleSearch() {
@@ -416,9 +506,7 @@ function handleSearch() {
 }
 
 async function copyCommitMessage() {
-  const modelName = commitSubject.value.trim() || "gemini 3.8 flash high";
-  const textToCopy = (activeCommitMode === "model_only") ? modelName : commitPreviewBox.textContent;
-
+  const textToCopy = commitPreviewBox.textContent;
   try {
     await navigator.clipboard.writeText(textToCopy);
     const origText = copyCommitBtn.textContent;
@@ -426,10 +514,24 @@ async function copyCommitMessage() {
     copyPreviewBtn.textContent = "✓ Copied!";
     setTimeout(() => {
       copyCommitBtn.textContent = origText;
-      copyPreviewBtn.textContent = "Copy";
+      copyPreviewBtn.textContent = "Copy Commit";
     }, 2000);
   } catch (err) {
     alert("Could not copy to clipboard: " + err);
+  }
+}
+
+async function copyNotesMessage() {
+  const textToCopy = notesPreviewBox.textContent;
+  try {
+    await navigator.clipboard.writeText(textToCopy);
+    const origText = copyNotesBtn.textContent;
+    copyNotesBtn.textContent = "✓ Copied!";
+    setTimeout(() => {
+      copyNotesBtn.textContent = origText;
+    }, 2000);
+  } catch (err) {
+    alert("Could not copy notes: " + err);
   }
 }
 

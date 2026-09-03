@@ -78,7 +78,8 @@ class WysiwygRenderer:
         line: MarkdownLine,
         wrap_width: int,
         has_comment: bool,
-        is_selected: bool
+        is_selected: bool,
+        ref_id: int = None
     ) -> List[Tuple[str, int, int]]:
         """
         Returns a list of rendered visual rows: (text, attr, line_number).
@@ -88,7 +89,10 @@ class WysiwygRenderer:
         gutter = f"{line.line_number:4d} │ "
         content_width = max(20, wrap_width - len(gutter) - 4)
 
-        comment_tag = " [★ Review]" if has_comment else ""
+        if has_comment:
+            comment_tag = f" [★ Ref {ref_id}]" if ref_id is not None else " [★ Review]"
+        else:
+            comment_tag = ""
 
         if line.line_type == "heading":
             if line.heading_level == 1:

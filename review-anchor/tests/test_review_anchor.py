@@ -1,6 +1,8 @@
 """
 Unit tests for Review Anchor.
-Tests markdown parsing, comment anchoring, and backwards-compatible git commit formatting.
+Tests markdown parsing, comment anchoring with [Ref N] tags,
+rebase-tolerant diff -p Git Notes formatting, Claude Code Q/A integration,
+and backwards-compatible git commit formatting.
 """
 
 import os
@@ -14,7 +16,7 @@ if pkg_root not in sys.path:
     sys.path.insert(0, pkg_root)
 
 from tui.markdown_parser import MarkdownParser, MarkdownLine
-from tui.git_anchoring import GitAnchoring, ReviewComment
+from tui.git_anchoring import GitAnchoring, ReviewComment, QAItem
 
 
 SAMPLE_MARKDOWN = """# Plan Title
@@ -87,12 +89,12 @@ class TestGitAnchoring(unittest.TestCase):
         msg = anchor.format_commit_message(general_prompt="Should be omitted in model_only")
         self.assertEqual(msg, "gemini 3.8 flash high")
 
-        # Review body is available for Git Notes
-        review_notes = anchor.format_review_body()
-        self.assertIn("[Line 1]", review_notes)
-        self.assertIn("Test comment", review_notes)
+        # Review diff -p context is available for Git Notes
+        notes = anchor.format_git_notes()
+        self.assertIn("[Ref 1] implementation_plan.md:L1", notes)
+        self.assertIn("Context: @@ # Plan Title @@", notes)
 
-    def test_backwards_compatible_detailed_commit_format(self):
+    def test_detailed_commit_format_with_refs(self):
         anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
         anchor.model_header = "gemini 3.8 flash high"
         anchor.commit_mode = "detailed"
@@ -117,16 +119,61 @@ class TestGitAnchoring(unittest.TestCase):
         self.assertEqual(lines[0], "gemini 3.8 flash high")
         self.assertEqual(lines[1], "")
 
-        # Body contains general prompt
+        # Body contains general prompt (snapshot of model input)
         self.assertIn("Updated review comments on implementation plan.", commit_msg)
 
-        # Body contains anchored line reference
-        self.assertIn("[Line 5] Section: \"User Review Required\"", commit_msg)
+        # Body contains anchored ref identifier instead of raw line number
+        self.assertIn("[Ref 1] Review on \"User Review Required\":", commit_msg)
         self.assertIn("Review: Approved. Ensure 60mm is verified with physical ruler.", commit_msg)
 
         # Body contains RFC 822 trailers
         self.assertIn("Review-Doc: implementation_plan.md", commit_msg)
         self.assertIn("Review-Anchor: #user-review-required", commit_msg)
+
+    def test_diff_p_git_notes_format(self):
+        anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
+        parsed = MarkdownParser.parse_file(self.plan_path)
+        line5 = parsed[4]  # "> [!IMPORTANT]"
+
+        anchor.add_comment(
+            line=line5,
+            comment_text="Corner line length check.",
+            section_name="User Review Required",
+            section_slug="user-review-required"
+        )
+
+        notes = anchor.format_git_notes()
+        self.assertIn("Review Anchors (diff -p context):", notes)
+        self.assertIn("[Ref 1] implementation_plan.md:L5", notes)
+        self.assertIn("Context: @@ ## User Review Required @@", notes)
+        self.assertIn("The corner lines must be 60mm long.", notes)
+
+    def test_claude_code_qa_integration(self):
+        anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
+        anchor.model_header = "claude-3-5-sonnet"
+        anchor.commit_mode = "detailed"
+
+        # Add Q/A item anchored to section
+        qa = anchor.add_qa(
+            question="How should orientation tilt be handled?",
+            answer="Reject frames beyond 45° with haptic warning.",
+            section_name="User Review Required",
+            line_number=5
+        )
+        self.assertIsNotNone(qa)
+        self.assertEqual(qa.ref_id, 1)
+
+        msg = anchor.format_commit_message()
+        self.assertIn("claude-3-5-sonnet", msg)
+        self.assertIn("Claude Code Q/A Context:", msg)
+        self.assertIn("[Ref 1] (User Review Required)", msg)
+        self.assertIn("Q: How should orientation tilt be handled?", msg)
+        self.assertIn("A: Reject frames beyond 45° with haptic warning.", msg)
+
+        # Git Notes should contain diff -p context for this Ref
+        notes = anchor.format_git_notes()
+        self.assertIn("[Ref 1] implementation_plan.md (Claude Q/A)", notes)
+        self.assertIn("Context: @@ ## User Review Required @@", notes)
 
     def test_config_persistence(self):
         anchor = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
@@ -143,11 +190,15 @@ class TestGitAnchoring(unittest.TestCase):
         parsed = MarkdownParser.parse_file(self.plan_path)
 
         anchor1.add_comment(line=parsed[0], comment_text="Test comment 1")
+        anchor1.add_qa(question="Q1", answer="A1")
         self.assertEqual(len(anchor1.get_comments()), 1)
+        self.assertEqual(len(anchor1.get_qa_items()), 1)
 
         anchor2 = GitAnchoring(repo_root=self.temp_dir.name, plan_path=self.plan_path)
         self.assertEqual(len(anchor2.get_comments()), 1)
         self.assertEqual(anchor2.get_comments()[0].comment_text, "Test comment 1")
+        self.assertEqual(len(anchor2.get_qa_items()), 1)
+        self.assertEqual(anchor2.get_qa_items()[0].question, "Q1")
 
 
 if __name__ == "__main__":
