@@ -26,7 +26,7 @@ class ReviewAnchorTUI:
         self.scroll_offset = 0
         self.wrap_width = 80
         self.show_split_pane = True
-        self.status_message = "Press 'c' to comment, 'm' for model, 't' toggle mode, 'P' commit & tag pending-push"
+        self.status_message = "Press 'c' to comment, 'm' for model, 't' toggle mode, 'G' commit, '?' for help"
         
         self.load_file()
 
@@ -147,12 +147,7 @@ class ReviewAnchorTUI:
                 else:
                     self.status_message = "Failed to copy to clipboard."
             elif key in (ord('g'), ord('G')):
-                self._handle_git_commit(stdscr, tag_pending=False)
-            elif key in (ord('P'),):  # Shift-P: Commit and Tag pending-push
-                self._handle_git_commit(stdscr, tag_pending=True)
-            elif key in (ord('T'),):  # Shift-T: Tag current HEAD as pending-push
-                ok, msg = self.git_anchor.tag_pending_push("HEAD")
-                self.status_message = msg
+                self._handle_git_commit(stdscr)
             elif key == ord('?'):
                 self._show_help_dialog(stdscr)
 
@@ -163,11 +158,9 @@ class ReviewAnchorTUI:
         def_branch = self.git_anchor.get_default_branch()
         tag_hash, is_at_tag = self.git_anchor.get_pending_push_info()
 
-        tag_str = f"tag:{tag_hash}" if tag_hash else "no tag"
-        if is_at_tag:
-            tag_str += "✓"
+        bookmark_str = f"bookmark: {tag_hash}" if tag_hash else ""
 
-        header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} | {tag_str} "
+        header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} | {bookmark_str} "
         stdscr.addstr(0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
         row_y = 1
@@ -326,10 +319,10 @@ class ReviewAnchorTUI:
         else:
             self.status_message = f"No match for: '{clip[:25]}...'"
 
-    def _handle_git_commit(self, stdscr, tag_pending: bool = False):
+    def _handle_git_commit(self, stdscr):
         msg = self.git_anchor.format_commit_message()
-        action_label = "Commit & Tag pending-push" if tag_pending else "Commit"
-        confirm_str = f"{action_label} with message '{msg[:30]}' (mode: {self.git_anchor.commit_mode})? (y/n): "
+        mode_desc = "Temporary / Model-Only" if self.git_anchor.commit_mode == "model_only" else "Detailed Review"
+        confirm_str = f"Create git commit [{mode_desc}] with message '{msg[:30]}'? (y/n): "
 
         max_y, max_x = stdscr.getmaxyx()
         stdscr.addstr(max_y - 1, 0, " " * max_x)
@@ -337,7 +330,7 @@ class ReviewAnchorTUI:
         ch = stdscr.getch()
 
         if ch in (ord('y'), ord('Y')):
-            ok, result = self.git_anchor.execute_commit(tag_pending=tag_pending)
+            ok, result = self.git_anchor.execute_commit()
             self.status_message = result
         else:
             self.status_message = "Cancelled."
@@ -359,10 +352,11 @@ class ReviewAnchorTUI:
             "  Tab / s       : Toggle side-by-side split pane",
             "  y             : Copy formatted commit message to clipboard",
             "  G             : Run git commit",
-            "  P             : Commit AND tag 'pending-push'",
-            "  T             : Move 'pending-push' tag to current HEAD",
             "  ?             : Show this help window",
             "  q / Esc       : Quit",
+            "",
+            "  Bookmark Note:",
+            "  'pending-push' is preserved as an immutable example bookmark.",
             "",
             "Press any key to close help."
         ]

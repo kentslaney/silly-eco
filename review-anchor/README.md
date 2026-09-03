@@ -3,8 +3,8 @@
 A WYSIWYG review comment anchoring tool and git commit generator built for the `silly-eco` monorepo.
 
 Review Anchor allows you to inspect implementation plans side-by-side with the Antigravity IDE, anchor comments to specific lines and sections, and generate git commit messages that match your repository's workflow:
-- **`pending-push` Tag & Staging Branch Integration**: Tracks `refs/heads/staging` (GitHub default branch) and the `pending-push` tag.
-- **Model Name Only Mode**: Commit message is strictly the (configurable) model name (e.g. `gemini 3.8 flash high`), with review comments preserved in Git Notes.
+- **Reference Bookmark (`pending-push`)**: Displays `pending-push` (`2cb59ca`) as an immutable reference bookmark preserving the example of a temporary commit format on `staging`.
+- **Temporary Commit (Model Name Only)**: Commit message is strictly the (configurable) model name (e.g. `gemini 3.8 flash high`), exactly like the `pending-push` exemplar. Line review comments are preserved in Git Notes for posterity.
 - **Detailed Mode**: Full commit body containing the review prompt, line quotes, section anchors, and RFC 822 trailers.
 
 ---
@@ -12,13 +12,11 @@ Review Anchor allows you to inspect implementation plans side-by-side with the A
 ## Features
 
 - **Backwards-Compatible Commit Modes**:
-  - **Model Name Only (pending-push style)**: The commit message is literally just `<model_name>` (e.g. `gemini 3.8 flash high`). Line comments and metadata are recorded to Git Notes (`git notes add`) for posterity, keeping the git log clean.
+  - **Temporary Commit (Model Name Only)**: The commit message is literally just `<model_name>` (e.g. `gemini 3.8 flash high`), matching the `pending-push` bookmark on `staging`. Line comments and metadata are recorded to Git Notes (`git notes add`) for posterity, keeping the git log clean while the branch moves.
   - **Detailed Mode**: Subject line is the model name, followed by prompt notes, line references, snippets, and trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Reviewed-At`).
-- **Tag & Branch UX**:
-  - Automatically identifies current branch vs default target (`staging`).
-  - Displays `pending-push` tag status (commit hash and whether HEAD matches).
-  - Quick action to move/create `pending-push` tag (`git tag -f pending-push HEAD`).
-  - Quick action to **Commit & Tag pending-push** in one step.
+- **Bookmark & Branch Awareness**:
+  - Displays current branch vs default target (`staging`).
+  - Displays the `pending-push` reference bookmark (`2cb59ca`) without modifying or overwriting it.
 - **WYSIWYG Markdown Rendering**:
   - Line numbers gutter (`001`, `002`...).
   - Rendered GitHub alert callouts (`[!NOTE]`, `[!IMPORTANT]`, `[!TIP]`, `[!WARNING]`, `[!CAUTION]`).
@@ -61,9 +59,7 @@ Or specify a plan file explicitly:
 | `+` / `-` | Adjust column wrap width (match IDE line breaks) |
 | `Tab` / `s` | Toggle side-by-side split pane |
 | `y` | Copy formatted git commit message to macOS clipboard |
-| `G` | Run `git commit` |
-| `P` | **Commit AND tag `pending-push`** |
-| `T` | Tag current HEAD as `pending-push` |
+| `G` | Create git commit |
 | `?` | Show help modal |
 | `q` / `Esc` | Quit |
 
@@ -75,16 +71,16 @@ Run with the `--gui` flag:
 ./review --gui
 ```
 This starts a lightweight local server at `http://127.0.0.1:8765` and opens your browser.
-- **Branch & Tag Badges**: View current branch, default branch (`staging`), and `pending-push` tag hash in the header.
-- **Format Toggle**: Choose between **Model Name Only** (as in `pending-push`) and **Detailed Review**.
+- **Branch & Bookmark Badges**: View current branch, default branch (`staging`), and the `pending-push` reference bookmark hash in the header.
+- **Format Toggle**: Choose between **Temporary Commit (Model Name Only - matching pending-push bookmark)** and **Detailed Review**.
 - **Model Preset Chips**: Click quick chips (`gemini 3.8 flash high`, `gemini 1.5 pro`, `claude 3.5`) or type a custom name.
-- **Actions**: Click **Tag pending-push**, **Commit**, or **Commit & Tag pending-push** directly from the UI.
+- **Actions**: Click **Create Commit** or **Copy Git Commit** directly from the UI.
 
 ---
 
 ## Commit Format Examples
 
-### Mode 1: Model Name Only (Matching `pending-push`)
+### Mode 1: Temporary Commit (Matching `pending-push` Bookmark)
 ```text
 gemini 3.8 flash high
 ```

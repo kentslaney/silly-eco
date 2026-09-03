@@ -26,8 +26,6 @@ const commitPreviewBox = document.getElementById("commitPreviewBox");
 const copyCommitBtn = document.getElementById("copyCommitBtn");
 const copyPreviewBtn = document.getElementById("copyPreviewBtn");
 const commitBtn = document.getElementById("commitBtn");
-const commitAndTagBtn = document.getElementById("commitAndTagBtn");
-const tagPendingBtn = document.getElementById("tagPendingBtn");
 const clearCommentsBtn = document.getElementById("clearCommentsBtn");
 
 // Mode radios
@@ -93,10 +91,8 @@ function setupEventListeners() {
   copyCommitBtn.addEventListener("click", copyCommitMessage);
   copyPreviewBtn.addEventListener("click", copyCommitMessage);
 
-  // Git Actions
-  tagPendingBtn.addEventListener("click", handleTagPending);
-  commitBtn.addEventListener("click", () => handleCommit(false));
-  commitAndTagBtn.addEventListener("click", () => handleCommit(true));
+  // Git Action
+  commitBtn.addEventListener("click", handleCommit);
 
   // Clear Comments
   clearCommentsBtn.addEventListener("click", async () => {
@@ -149,9 +145,9 @@ async function loadData() {
     gitBranchBadge.textContent = branchText;
 
     if (data.pending_push_hash) {
-      pendingTagBadge.textContent = `pending-push: ${data.pending_push_hash}${data.is_at_pending_push ? ' ✓' : ''}`;
+      pendingTagBadge.textContent = `Bookmark: pending-push (${data.pending_push_hash})`;
     } else {
-      pendingTagBadge.textContent = "pending-push: (none)";
+      pendingTagBadge.textContent = "Bookmark: pending-push";
     }
 
     const commRes = await fetch("/api/comments");
@@ -437,24 +433,11 @@ async function copyCommitMessage() {
   }
 }
 
-async function handleTagPending() {
-  try {
-    const res = await fetch("/api/tag-pending", { method: "POST" });
-    const data = await res.json();
-    alert(data.message || "Tagged pending-push!");
-    await loadData();
-  } catch (err) {
-    alert("Tagging failed: " + err);
-  }
-}
-
-async function handleCommit(tagPending) {
+async function handleCommit() {
   const modelName = commitSubject.value.trim() || "gemini 3.8 flash high";
-  const confirmMsg = tagPending
-    ? `Create commit with message "${modelName}" and tag as pending-push?`
-    : `Create commit with message "${modelName}"?`;
+  const modeDesc = (activeCommitMode === "model_only") ? "Temporary Commit (Model Name Only)" : "Detailed Review Commit";
 
-  if (!confirm(confirmMsg)) return;
+  if (!confirm(`Create git commit [${modeDesc}] with message "${modelName}"?`)) return;
 
   try {
     const res = await fetch("/api/commit", {
@@ -462,7 +445,6 @@ async function handleCommit(tagPending) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mode: activeCommitMode,
-        tag_pending: tagPending,
         prompt: generalPrompt.value.trim()
       })
     });

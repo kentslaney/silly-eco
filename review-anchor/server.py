@@ -143,29 +143,14 @@ class ReviewAnchorHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(str(e).encode("utf-8"))
             return
 
-        elif self.path == "/api/tag-pending":
-            try:
-                git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
-                ok, msg = git_anchor.tag_pending_push("HEAD")
-                self.send_response(200 if ok else 400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": ok, "message": msg}).encode("utf-8"))
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(str(e).encode("utf-8"))
-            return
-
         elif self.path == "/api/commit":
             try:
                 body = json.loads(post_data) if post_data else {}
                 git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
                 mode = body.get("mode", git_anchor.commit_mode)
-                tag_pending = body.get("tag_pending", False)
                 prompt = body.get("prompt", None)
 
-                ok, msg = git_anchor.execute_commit(general_prompt=prompt, mode=mode, tag_pending=tag_pending)
+                ok, msg = git_anchor.execute_commit(general_prompt=prompt, mode=mode)
                 self.send_response(200 if ok else 400)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()

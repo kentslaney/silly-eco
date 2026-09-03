@@ -244,34 +244,18 @@ class GitAnchoring:
 
         return "\n\n".join(blocks) + "\n\n" + "\n".join(trailers)
 
-    # Tagging & Commits
-    def tag_pending_push(self, commit_ref: str = "HEAD") -> Tuple[bool, str]:
-        """Tags commit_ref with 'pending-push'."""
-        try:
-            res = subprocess.run(
-                ["git", "tag", "-f", "pending-push", commit_ref],
-                cwd=self.repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False
-            )
-            if res.returncode == 0:
-                return True, f"Successfully tagged {commit_ref} as 'pending-push'"
-            return False, res.stderr.strip()
-        except Exception as e:
-            return False, str(e)
-
+    # Commit Execution
     def execute_commit(
         self,
         general_prompt: Optional[str] = None,
-        mode: Optional[str] = None,
-        tag_pending: bool = False
+        mode: Optional[str] = None
     ) -> Tuple[bool, str]:
         """
-        Runs git commit using the formatted message.
-        If mode == 'model_only' and there are review comments, records them to Git Notes.
-        If tag_pending == True, updates 'pending-push' tag to new HEAD.
+        Runs git commit using the formatted message:
+        - In 'model_only' mode: commit message is strictly the model name
+          (matching the temporary commit example bookmarked at 'pending-push').
+          Review comments are preserved in Git Notes.
+        - In 'detailed' mode: commit message includes the full review body & trailers.
         """
         active_mode = mode or self.commit_mode
         msg = self.format_commit_message(general_prompt=general_prompt, mode=active_mode)
@@ -298,10 +282,6 @@ class GitAnchoring:
                     stderr=subprocess.PIPE,
                     check=False
                 )
-
-            # Optionally tag as pending-push
-            if tag_pending:
-                self.tag_pending_push("HEAD")
 
             return True, "✓ Commit created successfully!"
         except Exception as e:
