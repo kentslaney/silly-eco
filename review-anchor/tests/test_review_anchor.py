@@ -201,5 +201,38 @@ class TestGitAnchoring(unittest.TestCase):
         self.assertEqual(anchor2.get_qa_items()[0].question, "Q1")
 
 
+class MockCursesWindow:
+    def __init__(self, max_y=24, max_x=80):
+        self.max_y = max_y
+        self.max_x = max_x
+        self.written = []
+
+    def getmaxyx(self):
+        return (self.max_y, self.max_x)
+
+    def addstr(self, y, x, text, attr=0):
+        if y == self.max_y - 1 and (x + len(text) >= self.max_x):
+            import _curses
+            raise _curses.error("addwstr() returned ERR")
+        self.written.append((y, x, text, attr))
+
+
+class TestSafeCurses(unittest.TestCase):
+    def test_safe_addstr_prevents_bottom_right_crash(self):
+        from tui.app import ReviewAnchorTUI
+        tui = ReviewAnchorTUI(plan_path="implementation_plan.md")
+        win = MockCursesWindow(max_y=24, max_x=80)
+
+        # Attempting to write full row width on the bottom-most line
+        full_line = " " * 80
+        tui._safe_addstr(win, 23, 0, full_line)
+        self.assertTrue(len(win.written) > 0)
+        y, x, text, _ = win.written[0]
+        self.assertEqual(y, 23)
+        self.assertEqual(x, 0)
+        self.assertLess(x + len(text), 80)
+
+
 if __name__ == "__main__":
     unittest.main()
+

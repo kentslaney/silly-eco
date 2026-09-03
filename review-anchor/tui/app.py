@@ -1,7 +1,8 @@
 """
 Interactive Curses TUI Application for Review Anchoring.
 Provides side-by-side WYSIWYG markdown viewing, line-by-line comment anchoring,
-configurable model names, and backwards-compatible git commit & 'pending-push' tag management.
+Claude Code Q/A context prompts, and backwards-compatible git commit & Git Notes management.
+Safe against curses bounds and multi-byte encoding errors on macOS / modern terminals.
 """
 
 import curses
@@ -9,7 +10,7 @@ import os
 import subprocess
 from typing import List, Optional, Tuple
 from .clipboard import Clipboard
-from .git_anchoring import GitAnchoring, ReviewComment
+from .git_anchoring import GitAnchoring, ReviewComment, QAItem
 from .markdown_parser import MarkdownLine, MarkdownParser
 from .wysiwyg_renderer import WysiwygRenderer
 
@@ -20,14 +21,14 @@ class ReviewAnchorTUI:
         self.repo_root = repo_root or os.getcwd()
         self.markdown_lines: List[MarkdownLine] = []
         self.git_anchor = GitAnchoring(repo_root=self.repo_root, plan_path=self.plan_path)
-        
+
         # State
         self.selected_line_idx = 0
         self.scroll_offset = 0
         self.wrap_width = 80
         self.show_split_pane = True
-        self.status_message = "Press 'c' to comment, 'm' for model, 't' toggle mode, 'G' commit, '?' for help"
-        
+        self.status_message = "Press 'c' to comment, 'a' for Claude Q/A, 'm' model, 't' mode, 'G' commit, '?' help"
+
         self.load_file()
 
     def load_file(self):
@@ -52,6 +53,48 @@ class ReviewAnchorTUI:
     def run(self):
         curses.wrapper(self._main_loop)
 
+    def _safe_addstr(self, win, y: int, x: int, text: str, attr: int = 0):
+        """
+        Safely writes text to a curses window without raising _curses.error.
+        Guarantees:
+        - Out-of-bounds coordinates are safely ignored.
+        - Bottom row character (max_y - 1, max_x - 1) is never written, preventing curses cursor wrap ERR.
+        - Trims multi-byte / wide characters if terminal boundary issues occur.
+        """
+        try:
+            max_y, max_x = win.getmaxyx()
+            if y < 0 or y >= max_y or x < 0 or x >= max_x:
+                return
+
+            avail = max_x - x
+            # Bottom row safety: writing to the very bottom-right cell throws addwstr() ERR in curses
+            if y == max_y - 1:
+                avail = max(0, avail - 1)
+            if avail <= 0:
+                return
+
+            clipped = text[:avail]
+            while clipped:
+                try:
+                    win.addstr(y, x, clipped, attr)
+                    return
+                except curses.error:
+                    clipped = clipped[:-1]
+        except Exception:
+            pass
+
+    def _safe_clear_row(self, win, y: int):
+        """Clears a single line cleanly without writing into the bottom-right corner."""
+        try:
+            win.move(y, 0)
+            win.clrtoeol()
+        except Exception:
+            try:
+                max_y, max_x = win.getmaxyx()
+                self._safe_addstr(win, y, 0, " " * (max_x - 1))
+            except Exception:
+                pass
+
     def _main_loop(self, stdscr):
         curses.curs_set(0)
         stdscr.clear()
@@ -63,7 +106,7 @@ class ReviewAnchorTUI:
             stdscr.erase()
 
             if max_y < 10 or max_x < 40:
-                stdscr.addstr(0, 0, "Terminal window too small.", curses.A_BOLD)
+                self._safe_addstr(stdscr, 0, 0, "Terminal window too small.", curses.A_BOLD)
                 stdscr.refresh()
                 key = stdscr.getch()
                 if key in (ord('q'), 27):
@@ -169,9 +212,8 @@ class ReviewAnchorTUI:
         tag_hash, is_at_tag = self.git_anchor.get_pending_push_info()
 
         bookmark_str = f"bookmark: {tag_hash}" if tag_hash else ""
-
         header = f" {os.path.basename(self.plan_path)} | L{cur_line_num} | {curr_branch}→{def_branch} | {bookmark_str} "
-        stdscr.addstr(0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
+        self._safe_addstr(stdscr, 0, 0, header.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
         row_y = 1
         for idx in range(self.scroll_offset, len(self.markdown_lines)):
@@ -198,25 +240,25 @@ class ReviewAnchorTUI:
                 line_display = text.ljust(width)[:width]
                 if is_selected:
                     line_display = "▶ " + line_display[2:]
-                    stdscr.addstr(row_y, 0, line_display, curses.color_pair(WysiwygRenderer.COLOR_ACTIVE_LINE) | curses.A_BOLD)
+                    self._safe_addstr(stdscr, row_y, 0, line_display, curses.color_pair(WysiwygRenderer.COLOR_ACTIVE_LINE) | curses.A_BOLD)
                 else:
-                    stdscr.addstr(row_y, 0, line_display, attr)
+                    self._safe_addstr(stdscr, row_y, 0, line_display, attr)
                 row_y += 1
 
     def _render_right_pane(self, stdscr, max_y: int, start_x: int, width: int):
         for y in range(max_y):
-            stdscr.addstr(y, start_x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
+            self._safe_addstr(stdscr, y, start_x - 1, "│", curses.color_pair(WysiwygRenderer.COLOR_BORDER))
 
         mode_badge = "[MODEL-ONLY: pending-push]" if self.git_anchor.commit_mode == "model_only" else "[MODEL INPUT + DIFF -P NOTES]"
         title = f" COMMIT & REVIEW ({mode_badge}) "
-        stdscr.addstr(0, start_x, title.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
+        self._safe_addstr(stdscr, 0, start_x, title.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR) | curses.A_BOLD)
 
         commit_msg = self.git_anchor.format_commit_message()
         lines = commit_msg.splitlines()
 
         row_y = 1
         commit_hdr = "── Commit Message (Model Input Snapshot) ──"
-        stdscr.addstr(row_y, start_x, commit_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER))
+        self._safe_addstr(stdscr, row_y, start_x, commit_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER))
         row_y += 1
 
         for line in lines:
@@ -233,7 +275,7 @@ class ReviewAnchorTUI:
             else:
                 attr = curses.color_pair(WysiwygRenderer.COLOR_DEFAULT)
 
-            stdscr.addstr(row_y, start_x, line.ljust(width)[:width], attr)
+            self._safe_addstr(stdscr, row_y, start_x, line.ljust(width)[:width], attr)
             row_y += 1
 
         # Show Git Notes preview (diff -p context)
@@ -241,7 +283,7 @@ class ReviewAnchorTUI:
         if notes_str and row_y < max_y - 2:
             row_y += 1
             notes_hdr = "── Git Notes (diff -p Context Anchors) ──"
-            stdscr.addstr(row_y, start_x, notes_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER) | curses.A_BOLD)
+            self._safe_addstr(stdscr, row_y, start_x, notes_hdr[:width], curses.color_pair(WysiwygRenderer.COLOR_BORDER) | curses.A_BOLD)
             row_y += 1
             for n_line in notes_str.splitlines():
                 if row_y >= max_y:
@@ -252,12 +294,12 @@ class ReviewAnchorTUI:
                     attr = curses.color_pair(WysiwygRenderer.COLOR_HEADING2)
                 else:
                     attr = curses.color_pair(WysiwygRenderer.COLOR_GUTTER)
-                stdscr.addstr(row_y, start_x, n_line.ljust(width)[:width], attr)
+                self._safe_addstr(stdscr, row_y, start_x, n_line.ljust(width)[:width], attr)
                 row_y += 1
 
     def _render_status_bar(self, stdscr, y: int, width: int):
         bar = f" {self.status_message} "
-        stdscr.addstr(y, 0, bar.ljust(width)[:width], curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR))
+        self._safe_addstr(stdscr, y, 0, bar.ljust(width), curses.color_pair(WysiwygRenderer.COLOR_STATUS_BAR))
 
     def _handle_configure_model(self, stdscr):
         prompt_str = f"Set Model Name (current: '{self.git_anchor.model_header}'): "
@@ -265,8 +307,8 @@ class ReviewAnchorTUI:
         curses.curs_set(1)
 
         max_y, max_x = stdscr.getmaxyx()
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, prompt_str[:max_x - 1], curses.A_BOLD)
+        self._safe_clear_row(stdscr, max_y - 1)
+        self._safe_addstr(stdscr, max_y - 1, 0, prompt_str, curses.A_BOLD)
 
         try:
             inp = stdscr.getstr(max_y - 1, min(len(prompt_str), max_x - 5)).decode("utf-8").strip()
@@ -292,8 +334,8 @@ class ReviewAnchorTUI:
         curses.curs_set(1)
 
         max_y, max_x = stdscr.getmaxyx()
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, prompt_str[:max_x - 1], curses.A_BOLD)
+        self._safe_clear_row(stdscr, max_y - 1)
+        self._safe_addstr(stdscr, max_y - 1, 0, prompt_str, curses.A_BOLD)
 
         try:
             inp = stdscr.getstr(max_y - 1, min(len(prompt_str), max_x - 5)).decode("utf-8").strip()
@@ -353,8 +395,8 @@ class ReviewAnchorTUI:
         confirm_str = f"Create git commit [{mode_desc}] with message '{msg[:30]}'? (y/n): "
 
         max_y, max_x = stdscr.getmaxyx()
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, confirm_str[:max_x - 1], curses.A_BOLD)
+        self._safe_clear_row(stdscr, max_y - 1)
+        self._safe_addstr(stdscr, max_y - 1, 0, confirm_str, curses.A_BOLD)
         ch = stdscr.getch()
 
         if ch in (ord('y'), ord('Y')):
@@ -370,8 +412,8 @@ class ReviewAnchorTUI:
 
         # 1. Prompt for Question
         q_prompt = "Claude Code Question: "
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, q_prompt[:max_x - 1], curses.A_BOLD)
+        self._safe_clear_row(stdscr, max_y - 1)
+        self._safe_addstr(stdscr, max_y - 1, 0, q_prompt, curses.A_BOLD)
         try:
             q_text = stdscr.getstr(max_y - 1, min(len(q_prompt), max_x - 5)).decode("utf-8").strip()
         except Exception:
@@ -385,8 +427,8 @@ class ReviewAnchorTUI:
 
         # 2. Prompt for Answer / Instruction
         a_prompt = "Claude Code Answer / Instruction: "
-        stdscr.addstr(max_y - 1, 0, " " * max_x)
-        stdscr.addstr(max_y - 1, 0, a_prompt[:max_x - 1], curses.A_BOLD)
+        self._safe_clear_row(stdscr, max_y - 1)
+        self._safe_addstr(stdscr, max_y - 1, 0, a_prompt, curses.A_BOLD)
         try:
             a_text = stdscr.getstr(max_y - 1, min(len(a_prompt), max_x - 5)).decode("utf-8").strip()
         except Exception:
@@ -447,6 +489,6 @@ class ReviewAnchorTUI:
         win = curses.newwin(box_h, box_w, start_y, start_x)
         win.box()
         for idx, l in enumerate(help_lines):
-            win.addstr(idx + 1, 2, l[:box_w - 4], curses.A_BOLD if idx < 2 else curses.A_NORMAL)
+            self._safe_addstr(win, idx + 1, 2, l[:box_w - 4], curses.A_BOLD if idx < 2 else curses.A_NORMAL)
         win.refresh()
         win.getch()
