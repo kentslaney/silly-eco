@@ -21,7 +21,7 @@ function M.show_help()
     "",
     "  Review & Anchoring:",
     "    <leader>rc    Add review comment on current line (Normal) or selection (Visual)",
-    "    <leader>c     Shorthand for comment capture",
+    "    <leader>ri    Open inline instructions split (save :wq to commit, cancel :q!)",
     "    <leader>rq    Add Claude Code Q/A item (prompt snapshot)",
     "    <leader>rp    Set general model prompt / instruction notes",
     "    <leader>rd    Delete review anchor under cursor",
@@ -112,7 +112,7 @@ function M.attach_buffer(bufnr)
   map("n", "<leader>rx", outline.toggle_checkbox, "Toggle checkbox")
   map("n", "<C-c><C-c>", outline.toggle_checkbox, "Toggle checkbox")
 
-  -- Normal mode comment capture
+  -- Normal mode comment capture (strictly <leader>r prefix)
   local open_normal_comment = function()
     local cursor = vim.api.nvim_win_get_cursor(0)
     local line_0idx = cursor[1] - 1
@@ -120,7 +120,6 @@ function M.attach_buffer(bufnr)
     capture.open_comment_capture(bufnr, line_0idx, 0, #line_text, vim.trim(line_text))
   end
   map("n", "<leader>rc", open_normal_comment, "Add review comment")
-  map("n", "<leader>c", open_normal_comment, "Add review comment")
 
   -- Visual mode comment capture (anchored to visual selection)
   local open_visual_comment = function()
@@ -136,7 +135,15 @@ function M.attach_buffer(bufnr)
     capture.open_comment_capture(bufnr, line_0idx, col_s, col_e, vim.trim(selected_text))
   end
   map("v", "<leader>rc", open_visual_comment, "Add review comment to selection")
-  map("v", "<leader>c", open_visual_comment, "Add review comment to selection")
+
+  -- Inline instructions split
+  map("n", "<leader>ri", function()
+    local inline = require("review_anchor.inline")
+    local ibuf, _ = inline.open_inline_instructions()
+    if ibuf and ibuf > 0 then
+      M.attach_buffer(ibuf)
+    end
+  end, "Open inline instructions split")
 
   -- Claude Q/A and prompt capture
   map("n", "<leader>rq", capture.open_qa_capture, "Add Claude Q/A")
@@ -181,35 +188,113 @@ function M.setup(opts)
   config.setup_highlights()
 end
 
---- Start review session on target file.
---- Opens target file in upper window and git log --graph --all in bottom split.
----@param filepath? string
-function M.start(filepath)
-  M.setup()
+--- Initialize uninitialized git repository matching GitHub behavior.
+--- Prompts for remote source URL and license, runs git init, creates initial commit,
+--- creates blank .gitignore, and opens git log and inline instruction splits.
+---@param opts? table
+---@param on_complete? fun()
+function M.init_repo(opts, on_complete)
+  local license_mod = require("review_anchor.license")
+  opts = opts or {}
 
-  if filepath and filepath ~= "" and vim.fn.filereadable(filepath) == 1 then
-    vim.cmd("edit " .. vim.fn.fnameescape(filepath))
-  elseif filepath and filepath ~= "" then
-    vim.cmd("edit " .. vim.fn.fnameescape(filepath))
+  local function do_init(remote_url, lic_key)
+    vim.fn.system("git init -b main 2>/dev/null || git init")
+    if remote_url and vim.trim(remote_url) ~= "" then
+      vim.fn.system("git remote add origin " .. vim.fn.shellescape(vim.trim(remote_url)))
+    end
+
+    if lic_key and lic_key ~= "None" and license_mod.LICENSES[lic_key] then
+      license_mod.write_license(lic_key, "LICENSE")
+      vim.fn.system("git add LICENSE")
+      vim.fn.system("git commit -m 'Initial commit'")
+    else
+      vim.fn.system("git commit --allow-empty -m 'Initial commit'")
+    end
+
+    -- Add blank .gitignore ready for the first prompt commit
+    local gf = io.open(".gitignore", "a")
+    if gf then gf:close() end
+    vim.fn.system("git add .gitignore")
+
+    config.options.omit_model_header = true
+
+    if on_complete then
+      on_complete()
+    else
+      M.start("", { first_prompt_no_model = true })
+    end
   end
 
-  local main_buf = vim.api.nvim_get_current_buf()
-  local main_win = vim.api.nvim_get_current_win()
+  if opts.headless or vim.fn.has("gui_running") == 0 and not vim.api.nvim_get_mode().mode:match("[ni]") then
+    -- Headless default
+    do_init(opts.remote_url or "", opts.license or "CC0-1.0")
+    return
+  end
 
-  -- Attach review-anchor layer
-  M.attach_buffer(main_buf)
-
-  -- Open git log --graph --all in split below
-  splits.open_git_log(main_win)
-
-  -- Ensure focus returns to main buffer window with soft-wrap enabled
-  if vim.api.nvim_win_is_valid(main_win) then
-    pcall(function()
-      vim.api.nvim_set_option_value("wrap", true, { win = main_win })
-      vim.api.nvim_set_option_value("linebreak", true, { win = main_win })
-      vim.api.nvim_set_option_value("breakindent", true, { win = main_win })
+  vim.ui.input({ prompt = "Enter remote repository URL (leave blank to skip): " }, function(remote_url)
+    local license_items = { "CC0-1.0", "MIT", "GPL-3.0", "Apache-2.0", "BSD-3-Clause", "Unlicense", "None" }
+    vim.ui.select(license_items, {
+      prompt = "Select license for initial commit (matching GitHub):",
+      format_item = function(item)
+        local l = license_mod.LICENSES[item]
+        return l and string.format("%s (%s)", item, l.name) or item
+      end,
+    }, function(choice)
+      do_init(remote_url, choice or "CC0-1.0")
     end)
-    vim.api.nvim_set_current_win(main_win)
+  end)
+end
+
+--- Start review session on target file or default to inline instructions above git log.
+---@param filepath? string
+---@param opts? table
+function M.start(filepath, opts)
+  M.setup(opts)
+  opts = opts or {}
+
+  if opts.first_prompt_no_model or opts.omit_model_header then
+    config.options.omit_model_header = true
+  end
+
+  -- Check if repo is initialized
+  local is_git = vim.fn.system("git rev-parse --is-inside-work-tree 2>/dev/null"):gsub("%s+$", "") == "true"
+  if not is_git then
+    M.init_repo(opts)
+    return
+  end
+
+  -- Case A: Implementation plan file provided
+  if filepath and filepath ~= "" and (vim.fn.filereadable(filepath) == 1 or filepath:match("%.md$")) then
+    vim.cmd("edit " .. vim.fn.fnameescape(filepath))
+
+    local main_buf = vim.api.nvim_get_current_buf()
+    local main_win = vim.api.nvim_get_current_win()
+
+    M.attach_buffer(main_buf)
+    splits.open_git_log(main_win)
+
+    if vim.api.nvim_win_is_valid(main_win) then
+      pcall(function()
+        vim.api.nvim_set_option_value("wrap", true, { win = main_win })
+        vim.api.nvim_set_option_value("linebreak", true, { win = main_win })
+        vim.api.nvim_set_option_value("breakindent", true, { win = main_win })
+      end)
+      vim.api.nvim_set_current_win(main_win)
+    end
+  else
+    -- Case B: Run without an implementation plan file provided
+    -- Default to just the inline instruction split above the git log
+    local cur_win = vim.api.nvim_get_current_win()
+    splits.open_git_log(cur_win)
+
+    local inline = require("review_anchor.inline")
+    local ibuf, iwin = inline.open_inline_instructions()
+    if ibuf and ibuf > 0 then
+      M.attach_buffer(ibuf)
+    end
+    if iwin and vim.api.nvim_win_is_valid(iwin) then
+      vim.api.nvim_set_current_win(iwin)
+    end
   end
 
   vim.notify("Review Anchor attached. Press <leader>r? for help.", vim.log.levels.INFO, { title = "Review Anchor" })

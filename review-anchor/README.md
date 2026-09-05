@@ -18,16 +18,20 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
   - Full native Vim editing: visual mode selections, sub-line and multi-line anchoring, motions (`M`, `zz`, `g`, `G`), undo/redo, and user plugins.
 - **Initial Startup Split & Soft-Wrap**:
   - Normal buffer on top (the review document) with soft-wrapping (`wrap`, `linebreak`, `breakindent`) enabled.
-  - Horizontal split below displaying `git log --graph --all --decorate` with full multi-line entries (ANSI colors).
-  - Focus remains immediately in the upper buffer.
+  - Horizontal split below displaying `git --no-pager log --graph --all --decorate` with full multi-line entries (eliminating `...skipping...` pager artifacts and line chopping).
+  - If no implementation plan file is provided, defaults to opening the inline instruction split directly above the git log graph.
 - **Org-Mode Outline & Folding**:
   - `<Tab>`: Cycle fold state for current heading (folded $\to$ children $\to$ expanded).
   - `<S-Tab>`: Cycle global outline levels document-wide (all folded $\to$ H1 $\to$ H2 $\to$ open all).
   - `]]` / `[[`: Jump to next / previous section heading.
   - `<leader>rx` or `<C-c><C-c>`: Toggle markdown checkbox (`- [ ]` $\leftrightarrow$ `- [x]`).
+- **Inline Instructions Split (`<leader>ri`)**:
+  - Opens an instruction buffer in a split placed above the git log graph if open, or below the current window.
+  - Like git rebase: quitting without saving (`:q!`, `ZQ`, `<C-c><C-k>`) cancels the operation; quitting with saving (`:wq`, `ZZ`, `<C-c><C-c>`) stages all changes (`git add -A`), commits with the instructions, and refreshes the git log graph.
+  - Opening the floating model prompt window (`<leader>rp`) pulls the inline instruction content, closes that split temporarily, and restores it updated upon closing.
 - **Review Anchoring & Extmarks**:
-  - `<leader>rc` or `<leader>c` (Normal): Attach comment to current line.
-  - `<leader>rc` or `<leader>c` (Visual): Attach comment to exact character range or visual block.
+  - `<leader>rc` (Normal): Attach comment to current line.
+  - `<leader>rc` (Visual): Attach comment to exact character range or visual block.
   - Renders gutter badge (`★ Ref N`) and inline virtual text (`[Ref N: "comment snippet..."]`).
   - Extmarks automatically follow line shifts as the document is edited.
 - **Claude Code Q/A & Prompt Capture**:
@@ -42,12 +46,16 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
   - `<leader>rb`: Toggle `[blank] ` prefix on model name for starting new conversations.
   - `<leader>rt`: Toggle between `detailed` snapshot mode and `model_only` mode.
   - `<leader>rm`: Configure active AI model name.
+- **Repository Onboarding (Uninitialized Workspaces)**:
+  - Automatically detects uninitialized directories.
+  - Prompts to enter a remote repository URL and select a license matching GitHub (CC0-1.0, MIT, GPL-3.0, Apache-2.0, BSD-3-Clause, Unlicense).
+  - Runs `git init`, creates the initial commit with the license, creates a blank `.gitignore` ready to commit for the first prompt, and opens the git log and inline instruction splits with the model header omitted from the first line.
 
 ---
 
 ## Quick Start
 
-Run the wrapper from the monorepo root:
+Run the wrapper from the monorepo root (defaults to inline instructions above git log):
 ```bash
 ./review
 ```
@@ -58,15 +66,16 @@ Or specify a document to review:
 
 ---
 
-## Keybindings Summary
+## Keybindings Summary (Strictly `<leader>r` Prefix)
 
 | Keybinding | Mode | Action |
 | --- | --- | --- |
 | `<Tab>` | Normal | Cycle fold for current heading subtree |
 | `<S-Tab>` | Normal | Cycle global fold levels document-wide |
 | `]]` / `[[` | Normal | Jump to next / previous section heading |
-| `<leader>rc` / `<leader>c` | Normal | Add review comment on current line |
-| `<leader>rc` / `<leader>c` | Visual | Add review comment on selected text / range |
+| `<leader>ri` | Normal | Open inline instructions split (`:wq` to commit, `:q!` to cancel) |
+| `<leader>rc` | Normal | Add review comment on current line |
+| `<leader>rc` | Visual | Add review comment on selected text / range |
 | `<leader>rq` | Normal | Add Claude Code Q/A item (prompt snapshot) |
 | `<leader>rp` | Normal | Edit general model prompt / instruction |
 | `<leader>rd` | Normal | Delete review anchor under cursor |

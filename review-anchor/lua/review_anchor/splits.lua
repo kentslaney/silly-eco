@@ -25,7 +25,7 @@ function M.open_git_log(main_win)
   local git_win = vim.api.nvim_get_current_win()
 
   -- Run terminal command
-  local cmd = config.options.git_log_cmd or "git log --graph --all"
+  local cmd = config.options.git_log_cmd or "git --no-pager log --graph --all"
   vim.cmd("terminal " .. cmd)
   local git_buf = vim.api.nvim_get_current_buf()
 

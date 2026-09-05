@@ -20,4 +20,10 @@ nvim --headless -l review-anchor/tests/test_anchors.lua
 echo "-> Running test_startup.lua..."
 nvim --headless -l review-anchor/tests/test_startup.lua
 
+echo "-> Running test_inline.lua..."
+nvim --headless -l review-anchor/tests/test_inline.lua
+
+echo "-> Running test_repo_init.lua..."
+nvim --headless -l review-anchor/tests/test_repo_init.lua
+
 echo "=== All Tests Passed Successfully! ==="

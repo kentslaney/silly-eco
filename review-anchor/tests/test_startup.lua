@@ -22,9 +22,25 @@ assert(vim.wo[current_win].wrap == true, "Editor window must have wrap enabled (
 assert(vim.wo[current_win].linebreak == true, "Editor window must have linebreak enabled")
 assert(vim.wo[current_win].breakindent == true, "Editor window must have breakindent enabled")
 
--- Verify git log command does not collapse entries to one line
+-- Verify git log command does not collapse entries to one line and uses --no-pager
 local config = require("review_anchor.config")
 assert(not config.options.git_log_cmd:match("%-%-oneline"), "git_log_cmd must not contain --oneline")
 assert(config.options.git_log_cmd:match("%-%-graph"), "git_log_cmd must contain --graph")
+assert(config.options.git_log_cmd:match("%-%-no%-pager"), "git_log_cmd must contain --no-pager")
+
+-- Close all windows and test startup without plan file (defaults to inline instructions above git log)
+vim.cmd("only")
+local splits = require("review_anchor.splits")
+splits.git_log_win = nil
+splits.git_log_buf = nil
+
+ra.start("")
+
+local inline = require("review_anchor.inline")
+assert(inline.is_open(), "Starting without plan file must open inline instructions split")
+assert(splits.git_log_win and vim.api.nvim_win_is_valid(splits.git_log_win), "git log split must be open below")
+
+local active_win = vim.api.nvim_get_current_win()
+assert(active_win == inline.inline_win, "Focus must be in the inline instructions split")
 
 print("✓ test_startup.lua passed")

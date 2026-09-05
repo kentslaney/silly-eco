@@ -8,18 +8,71 @@ TARGET=""
 if [ $# -gt 0 ]; then
   TARGET="$1"
   shift
-elif [ -f "$SCRIPT_DIR/review-anchor/implementation_plan.md" ]; then
-  TARGET="$SCRIPT_DIR/review-anchor/implementation_plan.md"
-elif [ -f "$SCRIPT_DIR/implementation_plan.md" ]; then
-  TARGET="$SCRIPT_DIR/implementation_plan.md"
-else
-  TARGET="review.md"
 fi
 
 PLUGIN_DIR="$SCRIPT_DIR/review-anchor"
+FIRST_PROMPT_OPT=""
 
-exec nvim \
-  --cmd "set rtp^=$PLUGIN_DIR" \
-  -c "setlocal wrap linebreak breakindent" \
-  -c "lua require('review_anchor').start([[$TARGET]])" \
-  "$TARGET" "$@"
+# If repo hasn't been initialized, prompt for remote repo source and/or license
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "=== Review Anchor: Repository Setup ==="
+  echo "Git repository is not initialized in $(pwd)."
+  echo
+  read -rp "Enter remote repository URL (leave blank to skip): " remote_url || remote_url=""
+  echo "Select a license file for the initial commit (matching GitHub):"
+  echo "  1) CC0 1.0 Universal"
+  echo "  2) MIT License"
+  echo "  3) GNU General Public License v3.0 (GPL)"
+  echo "  4) Apache License 2.0"
+  echo "  5) BSD 3-Clause License"
+  echo "  6) None"
+  read -rp "Choice [1-6] (default: 1): " lic_choice || lic_choice="1"
+  echo
+
+  git init -b main 2>/dev/null || git init
+  if [ -n "${remote_url:-}" ]; then
+    git remote add origin "$remote_url" 2>/dev/null || true
+  fi
+
+  LIC_KEY="CC0-1.0"
+  case "${lic_choice:-1}" in
+    1|"") LIC_KEY="CC0-1.0" ;;
+    2) LIC_KEY="MIT" ;;
+    3) LIC_KEY="GPL-3.0" ;;
+    4) LIC_KEY="Apache-2.0" ;;
+    5) LIC_KEY="BSD-3-Clause" ;;
+    6) LIC_KEY="None" ;;
+  esac
+
+  if [ "$LIC_KEY" != "None" ]; then
+    nvim --headless \
+      --cmd "set rtp^=$PLUGIN_DIR" \
+      -c "lua require('review_anchor.license').write_license('$LIC_KEY', 'LICENSE')" \
+      -c "q" >/dev/null 2>&1 || true
+    git add LICENSE 2>/dev/null || true
+    git commit -m "Initial commit" >/dev/null 2>&1 || true
+  else
+    git commit --allow-empty -m "Initial commit" >/dev/null 2>&1 || true
+  fi
+
+  # Add blank .gitignore ready to commit for the first prompt
+  touch .gitignore
+  git add .gitignore 2>/dev/null || true
+  FIRST_PROMPT_OPT="first_prompt_no_model = true"
+fi
+
+START_CMD="lua require('review_anchor').start([[$TARGET]], { $FIRST_PROMPT_OPT })"
+
+if [ -n "$TARGET" ]; then
+  exec nvim \
+    --cmd "set rtp^=$PLUGIN_DIR" \
+    -c "setlocal wrap linebreak breakindent" \
+    -c "$START_CMD" \
+    "$TARGET" "$@"
+else
+  exec nvim \
+    --cmd "set rtp^=$PLUGIN_DIR" \
+    -c "setlocal wrap linebreak breakindent" \
+    -c "$START_CMD" \
+    "$@"
+fi

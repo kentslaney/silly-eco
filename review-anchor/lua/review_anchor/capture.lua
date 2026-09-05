@@ -190,7 +190,17 @@ end
 
 --- Capture General Model Prompt instructions.
 function M.open_prompt_capture()
-  local current_prompt = anchors.get_prompt()
+  local inline = require("review_anchor.inline")
+  local had_inline_open = inline.is_open()
+  local current_prompt = ""
+
+  if had_inline_open then
+    current_prompt = inline.get_content_raw()
+    inline.close_split_temporary()
+  else
+    current_prompt = anchors.get_prompt()
+  end
+
   local cbuf, cwin = create_floating_window("Model Prompt / Instructions", 0.70, 0.45)
 
   local header = {
@@ -221,11 +231,19 @@ function M.open_prompt_capture()
     if vim.api.nvim_win_is_valid(cwin) then
       vim.api.nvim_win_close(cwin, true)
     end
+
+    if had_inline_open then
+      inline.open_inline_instructions(prompt)
+    end
   end
 
   local function cancel()
     if vim.api.nvim_win_is_valid(cwin) then
       vim.api.nvim_win_close(cwin, true)
+    end
+
+    if had_inline_open then
+      inline.open_inline_instructions(current_prompt)
     end
   end
 

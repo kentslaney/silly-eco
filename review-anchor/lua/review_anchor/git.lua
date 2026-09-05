@@ -22,6 +22,16 @@ end
 function M.format_commit_message()
   local mode = config.options.commit_mode
   local model = config.get_model_name()
+  local omit_model = config.options.omit_model_header
+
+  if omit_model then
+    local prompt = anchors_mod.get_prompt()
+    if prompt ~= "" then
+      return prompt
+    else
+      return "Initial instructions"
+    end
+  end
 
   if mode == "model_only" then
     return model
@@ -200,6 +210,7 @@ function M.execute_commit(on_complete)
 
   local success_msg = "Git commit created & Git Notes attached to HEAD!"
   vim.notify(success_msg, vim.log.levels.INFO, { title = "Review Anchor" })
+  config.options.omit_model_header = false
   pcall(function()
     require("review_anchor.splits").refresh_git_log()
   end)
