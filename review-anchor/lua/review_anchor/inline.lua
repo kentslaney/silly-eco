@@ -45,10 +45,11 @@ function M.close_split_temporary()
 end
 
 --- Open inline instructions split.
---- Opens above the git log graph split if present, or below the current window otherwise.
+--- Opens in target_win if provided, or above git log graph if present, or below current window.
 ---@param initial_content? string
+---@param target_win? integer
 ---@return integer bufnr, integer winnr
-function M.open_inline_instructions(initial_content)
+function M.open_inline_instructions(initial_content, target_win)
   -- If already open, focus and optionally update
   if M.is_open() then
     vim.api.nvim_set_current_win(M.inline_win)
@@ -59,17 +60,18 @@ function M.open_inline_instructions(initial_content)
     return M.inline_buf, M.inline_win
   end
 
-  local current_win = vim.api.nvim_get_current_win()
-  local target_win = nil
-
-  -- Position split: above git log graph if open, otherwise below current window
-  if splits.git_log_win and vim.api.nvim_win_is_valid(splits.git_log_win) then
-    vim.api.nvim_set_current_win(splits.git_log_win)
-    vim.cmd("aboveleft split")
-    target_win = vim.api.nvim_get_current_win()
+  if target_win and vim.api.nvim_win_is_valid(target_win) then
+    vim.api.nvim_set_current_win(target_win)
   else
-    vim.cmd("belowright split")
-    target_win = vim.api.nvim_get_current_win()
+    -- Position split: above git log graph if open, otherwise below current window
+    if splits.git_log_win and vim.api.nvim_win_is_valid(splits.git_log_win) then
+      vim.api.nvim_set_current_win(splits.git_log_win)
+      vim.cmd("aboveleft split")
+      target_win = vim.api.nvim_get_current_win()
+    else
+      vim.cmd("belowright split")
+      target_win = vim.api.nvim_get_current_win()
+    end
   end
 
   -- Create temporary file for rebase-like file editing

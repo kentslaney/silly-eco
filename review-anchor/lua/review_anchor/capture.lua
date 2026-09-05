@@ -281,8 +281,12 @@ function M.open_preview_window()
     table.insert(content, "  GIT NOTES (refs/notes/commits - diff -p Context Anchors)")
     table.insert(content, "================================================================================")
 
-    for _, l in ipairs(vim.split(notes_msg, "\n")) do
-      table.insert(content, l)
+    if notes_msg ~= "" then
+      for _, l in ipairs(vim.split(notes_msg, "\n")) do
+        table.insert(content, l)
+      end
+    else
+      table.insert(content, "  (No review comments attached - Git Notes will not be written)")
     end
 
     table.insert(content, "")

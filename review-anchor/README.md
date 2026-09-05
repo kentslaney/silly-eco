@@ -39,10 +39,12 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
   - `<leader>rp`: Floating capture window for general model prompts / instructions.
 - **Git Notes & Commit Generator**:
   - Backwards-compatible model name subject (e.g. `gemini 3.8 flash high` or `[blank] gemini 3.8 flash high`).
-  - RFC 822 trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Review-Status`, `Reviewed-At`).
+  - RFC 822 trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Review-Status`, `Reviewed-At`) and Git Notes are included **only when comments exist**, keeping prompt-only commits clean.
   - `<leader>rP`: Preview formatted commit message and Git Notes (supports `[b]` toggle in preview).
   - `<leader>ry` / `<leader>rn`: Copy commit message / Git Notes to macOS clipboard.
+  - `<leader>rM`: Commit changes with just the active model name.
   - `<leader>rC`: Stages all changes (`git add -A`), commits, and attaches Git Notes to `HEAD`.
+  - **Smart Amend**: If instructions or review is committed without changes and HEAD is the current model name, it automatically uses `git commit --amend` to add the instructions into HEAD instead of making a new commit.
   - `<leader>rb`: Toggle `[blank] ` prefix on model name for starting new conversations.
   - `<leader>rt`: Toggle between `detailed` snapshot mode and `model_only` mode.
   - `<leader>rm`: Configure active AI model name.
@@ -55,7 +57,7 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
 
 ## Quick Start
 
-Run the wrapper from the monorepo root (defaults to inline instructions above git log):
+Run the wrapper from the monorepo root (defaults to inline instructions above git log, without any blank top split):
 ```bash
 ./review
 ```
@@ -85,6 +87,7 @@ Or specify a document to review:
 | `<leader>rP` | Normal | Preview formatted Git Commit message & Git Notes (`[b]` to toggle blank) |
 | `<leader>ry` | Normal | Copy Git Commit message to system clipboard |
 | `<leader>rn` | Normal | Copy Git Notes payload to system clipboard |
+| `<leader>rM` | Normal | Commit changes with just model name |
 | `<leader>rC` | Normal | Stage all changes (`git add -A`), execute Git Commit, attach Git Notes |
 | `<leader>rb` | Normal | Toggle `[blank] ` prefix on model name (denotes new conversation) |
 | `<leader>rm` | Normal | Change AI model name |

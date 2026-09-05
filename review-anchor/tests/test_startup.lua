@@ -43,4 +43,7 @@ assert(splits.git_log_win and vim.api.nvim_win_is_valid(splits.git_log_win), "gi
 local active_win = vim.api.nvim_get_current_win()
 assert(active_win == inline.inline_win, "Focus must be in the inline instructions split")
 
+local total_wins = vim.api.nvim_tabpage_list_wins(0)
+assert(#total_wins == 2, "Must have exactly 2 windows (no blank split on top); got: " .. #total_wins)
+
 print("✓ test_startup.lua passed")

@@ -123,6 +123,46 @@ assert(last_commit:match("gemini 3%.8 flash high"), "Commit message must match m
 local last_notes = vim.fn.system("git notes show HEAD")
 assert(last_notes:match("Review Anchors %(diff %-p context%):"), "Git notes must be attached to HEAD")
 
+-- Test 7: No review information/trailers or notes if there are no comments
+anchors.clear_all()
+anchors.set_prompt("Just a standalone instruction prompt")
+local msg_no_comments = git.format_commit_message()
+assert(not msg_no_comments:match("Review%-Doc:"), "Must NOT add Review-Doc trailer when there are no comments")
+assert(not msg_no_comments:match("Review%-Anchor:"), "Must NOT add Review-Anchor trailer when there are no comments")
+assert(not msg_no_comments:match("Reviewed%-By:"), "Must NOT add Reviewed-By trailer when there are no comments")
+assert(git.format_git_notes() == "", "format_git_notes must be empty string when there are no comments")
+
+-- Test 8: commit_model_only (<leader>rM)
+local test_file2 = test_dir .. "/second_change.txt"
+local tf2 = io.open(test_file2, "w")
+tf2:write("second change code\n")
+tf2:close()
+
+git.commit_model_only(function(ok, msg)
+  assert(ok, "commit_model_only must succeed")
+end)
+
+local model_commit_log = vim.trim(vim.fn.system("git log -1 --pretty=format:%B"))
+assert(model_commit_log == "gemini 3.8 flash high", "Model-only commit body must be exactly the model name; got: " .. model_commit_log)
+
+-- Test 9: Amend when instructions committed without changes and HEAD is model name
+-- Working tree is now clean, and HEAD is 'gemini 3.8 flash high'
+local status_clean = vim.trim(vim.fn.system("git status --porcelain"))
+assert(status_clean == "", "Working directory must be clean before testing amend")
+
+anchors.set_prompt("Added instructions amending previous commit")
+local commit_count_before = tonumber(vim.trim(vim.fn.system("git rev-list --count HEAD")))
+
+git.execute_commit(function(ok, msg)
+  assert(ok, "execute_commit (amend) must succeed")
+end)
+
+local commit_count_after = tonumber(vim.trim(vim.fn.system("git rev-list --count HEAD")))
+assert(commit_count_before == commit_count_after, string.format("Commit count must remain same (%d == %d) because git commit --amend was used", commit_count_before, commit_count_after))
+
+local amended_log = vim.fn.system("git log -1 --pretty=format:%B")
+assert(amended_log:match("Added instructions amending previous commit"), "Amended commit must contain instructions; got: " .. amended_log)
+
 -- Restore cwd and clean up
 vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
 vim.fn.delete(test_dir, "rf")

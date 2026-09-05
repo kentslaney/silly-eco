@@ -33,6 +33,7 @@ function M.show_help()
     "    <leader>ry    Copy formatted Commit Message to clipboard",
     "    <leader>rn    Copy Git Notes payload to clipboard",
     "    <leader>rC    Execute Git Commit and attach Git Notes to HEAD",
+    "    <leader>rM    Commit changes with just model name",
     "    <leader>rm    Configure AI model name (default: gemini 3.8 flash high)",
     "    <leader>rb    Toggle [blank] new conversation prefix",
     "    <leader>rt    Toggle commit mode (detailed snapshot <-> model-only)",
@@ -174,6 +175,7 @@ function M.attach_buffer(bufnr)
   map("n", "<leader>ry", git.copy_commit_message, "Copy commit message to clipboard")
   map("n", "<leader>rn", git.copy_git_notes, "Copy Git Notes to clipboard")
   map("n", "<leader>rC", function() git.execute_commit() end, "Execute commit & notes")
+  map("n", "<leader>rM", function() git.commit_model_only() end, "Commit changes with just model name")
   map("n", "<leader>rm", M.prompt_model_name, "Set model name")
   map("n", "<leader>rb", M.toggle_blank, "Toggle [blank] new conversation prefix")
   map("n", "<leader>rt", M.toggle_commit_mode, "Toggle commit mode")
@@ -283,12 +285,12 @@ function M.start(filepath, opts)
     end
   else
     -- Case B: Run without an implementation plan file provided
-    -- Default to just the inline instruction split above the git log
-    local cur_win = vim.api.nvim_get_current_win()
-    splits.open_git_log(cur_win)
+    -- Default to just the inline instruction split above the git log (reusing top window so no blank split)
+    local top_win = vim.api.nvim_get_current_win()
+    splits.open_git_log(top_win)
 
     local inline = require("review_anchor.inline")
-    local ibuf, iwin = inline.open_inline_instructions()
+    local ibuf, iwin = inline.open_inline_instructions(nil, top_win)
     if ibuf and ibuf > 0 then
       M.attach_buffer(ibuf)
     end
