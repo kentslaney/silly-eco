@@ -116,14 +116,14 @@ function M.open_qa_capture(bufnr)
 
   local template = {
     "# Context: " .. diff_context .. " in " .. rel_path,
-    "# Fill in Question (Q:) and Answer (A:). Save with <C-s> or <CR> in normal mode | <Esc>/q to Cancel",
+    "# Format: - Question -> Answer (or Q: ... / A: ...)",
+    "# Save with <C-s> or <CR> in normal mode | <Esc>/q to Cancel",
     "",
-    "Q: ",
-    "A: ",
+    "- Question -> Answer",
   }
 
   vim.api.nvim_buf_set_lines(cbuf, 0, -1, false, template)
-  vim.api.nvim_win_set_cursor(cwin, { 4, 3 })
+  vim.api.nvim_win_set_cursor(cwin, { 5, 2 })
   vim.cmd("startinsert!")
 
   local function save_qa()
@@ -134,16 +134,21 @@ function M.open_qa_capture(bufnr)
     local in_a = false
 
     for _, line in ipairs(lines) do
-      if line:match("^Q:%s*") then
-        in_q = true
-        in_a = false
-        table.insert(q_lines, line:gsub("^Q:%s*", ""))
-      elseif line:match("^A:%s*") then
-        in_q = false
-        in_a = true
-        table.insert(a_lines, line:gsub("^A:%s*", ""))
-      elseif not line:match("^#") then
-        if in_q then
+      if not line:match("^#") then
+        local q_arrow, a_arrow = line:match("^[%-%*]?%s*(.-)%s*%->%s*(.-)$")
+        if q_arrow and a_arrow and q_arrow ~= "" and a_arrow ~= "" and q_arrow ~= "Question" then
+          q_lines = { q_arrow }
+          a_lines = { a_arrow }
+          break
+        elseif line:match("^Q:%s*") then
+          in_q = true
+          in_a = false
+          table.insert(q_lines, line:gsub("^Q:%s*", ""))
+        elseif line:match("^A:%s*") then
+          in_q = false
+          in_a = true
+          table.insert(a_lines, line:gsub("^A:%s*", ""))
+        elseif in_q then
           table.insert(q_lines, line)
         elseif in_a then
           table.insert(a_lines, line)

@@ -39,11 +39,11 @@ function M.format_commit_message()
   if #qa_items > 0 then
     table.insert(lines, "Claude Code Q/A Context:")
     for _, qa in ipairs(qa_items) do
-      table.insert(lines, string.format("[Ref %d] (%s)", qa.id, qa.section_name))
-      table.insert(lines, "Q: " .. qa.question)
-      table.insert(lines, "A: " .. qa.answer)
-      table.insert(lines, "")
+      local q_text = vim.trim(qa.question:gsub("\n+", " "))
+      local a_text = vim.trim(qa.answer:gsub("\n+", " "))
+      table.insert(lines, string.format("- [Ref %d] %s -> %s", qa.id, q_text, a_text))
     end
+    table.insert(lines, "")
   end
 
   local all_anchors = anchors_mod.get_all_anchors()
@@ -89,10 +89,11 @@ function M.format_git_notes()
   local lines = { "Review Anchors (diff -p context):", "" }
 
   for _, qa in ipairs(qa_items) do
+    local q_text = vim.trim(qa.question:gsub("\n+", " "))
+    local a_text = vim.trim(qa.answer:gsub("\n+", " "))
     table.insert(lines, string.format("[Ref %d] %s (Claude Q/A)", qa.id, qa.file_path))
     table.insert(lines, "Context: " .. qa.diff_context)
-    table.insert(lines, "Q: " .. qa.question)
-    table.insert(lines, "A: " .. qa.answer)
+    table.insert(lines, string.format("- %s -> %s", q_text, a_text))
     table.insert(lines, "")
   end
 
