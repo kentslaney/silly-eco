@@ -104,26 +104,21 @@ function M.open_comment_capture(bufnr, line_0indexed, col_start, col_end, select
   vim.keymap.set("n", "q", cancel, { buffer = cbuf, nowait = true })
 end
 
---- Capture a Claude Code Q&A item.
----@param bufnr integer
-function M.open_qa_capture(bufnr)
-  local diff_p = require("review_anchor.diff_p")
-  local cur_line = vim.api.nvim_win_get_cursor(0)[1]
-  local diff_context, section_name = diff_p.find_enclosing_context(bufnr, cur_line)
-  local rel_path = diff_p.get_relative_path(bufnr)
-
-  local cbuf, cwin = create_floating_window("Claude Code Q/A Capture", 0.70, 0.50)
+--- Capture a Claude Code Q&A item (conversational prompt snapshot).
+function M.open_qa_capture()
+  local cbuf, cwin = create_floating_window("Claude Code Q/A Capture", 0.75, 0.45)
 
   local template = {
-    "# Context: " .. diff_context .. " in " .. rel_path,
-    "# Format: - Question -> Answer (or Q: ... / A: ...)",
+    "# Claude Code Q/A Prompt Context",
+    "# Format: • Question → Answer",
+    "# (Unicode • and → are inserted by default; you can also type -> or Q: / A:)",
     "# Save with <C-s> or <CR> in normal mode | <Esc>/q to Cancel",
     "",
-    "- Question -> Answer",
+    "• Question → Answer",
   }
 
   vim.api.nvim_buf_set_lines(cbuf, 0, -1, false, template)
-  vim.api.nvim_win_set_cursor(cwin, { 5, 2 })
+  vim.api.nvim_win_set_cursor(cwin, { 6, 2 })
   vim.cmd("startinsert!")
 
   local function save_qa()
@@ -135,7 +130,12 @@ function M.open_qa_capture(bufnr)
 
     for _, line in ipairs(lines) do
       if not line:match("^#") then
-        local q_arrow, a_arrow = line:match("^[%-%*]?%s*(.-)%s*%->%s*(.-)$")
+        -- Match Unicode arrow (→) or ASCII (->)
+        local q_arrow, a_arrow = line:match("^[%s•%-%*]*%s*(.-)%s*→%s*(.-)$")
+        if not q_arrow then
+          q_arrow, a_arrow = line:match("^[%s•%-%*]*%s*(.-)%s*%->%s*(.-)$")
+        end
+
         if q_arrow and a_arrow and q_arrow ~= "" and a_arrow ~= "" and q_arrow ~= "Question" then
           q_lines = { q_arrow }
           a_lines = { a_arrow }
@@ -162,9 +162,9 @@ function M.open_qa_capture(bufnr)
     if q == "" or a == "" then
       vim.notify("Both Question and Answer are required.", vim.log.levels.WARN, { title = "Review Anchor" })
     else
-      local item = anchors.add_qa(q, a, diff_context, section_name, rel_path)
-      vim.notify(string.format("Added Claude Q/A [Ref %d] for %s", item.id, section_name),
-                 vim.log.levels.INFO, { title = "Review Anchor" })
+      anchors.add_qa(q, a)
+      local preview_msg = string.format("Added Claude Q/A: • %s → %s", q, a)
+      vim.notify(preview_msg, vim.log.levels.INFO, { title = "Review Anchor" })
     end
 
     if vim.api.nvim_win_is_valid(cwin) then

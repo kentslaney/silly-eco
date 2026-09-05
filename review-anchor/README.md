@@ -5,7 +5,7 @@ A pure Lua review comment anchoring layer and runtime wrapper for Neovim, featur
 Review Anchor enables seamless pair-review between human reviewers and AI models (Antigravity IDE Gemini & Claude Code), maintaining a principled separation of concerns between commit messages and Git Notes:
 - **Commit Message as Historical Model Input Snapshot**: Review comments, instructions, prompts, and Claude Code Q/A pairs are historical snapshots of contextual instructions given to the model. They belong in the commit message body under the model header (tagged with reference identifiers like `[Ref 1]`, `[Ref 2]`), keeping historical records immutable without generating throwaway markdown files per commit.
 - **Git Notes for Rebase-Tolerant `diff -p` Context Anchors**: Line anchors and document locations shift when rebases or operational transformations (OT) occur. Git Notes attach each reference number (`[Ref 1]`, `[Ref 2]`) to its `diff -p` type context (`@@ ## Enclosing Heading / Symbol @@`, line number, and context hunk), enabling anchors to be tracked and updated independently of immutable commit SHAs.
-- **Claude Code Q/A Format**: First-class support for conversational Q/A prompts formatted as bullet point, question, right arrow, answer (`- [Ref 1] Question -> Answer`), treating Q/A as contextual instructions rather than document annotations.
+- **Claude Code Q/A Format**: Conversational prompt instructions formatted with Unicode bullet point and right arrow (`• Question → Answer`), treated as direct model input context without artificial design doc references or Git Notes anchors.
 - **Org-mode Addon Layer for Neovim**: Uses the user's native Neovim runtime (`~/.config/nvim`) without disabling user configs or plugins, providing headline folding (`<Tab>`, `<S-Tab>`), visual range / sub-line anchoring, floating capture buffers (`<leader>rc`, `<leader>rq`, `<leader>rp`), and extmark virtual text badges.
 - **Startup Split**: Opens `git log --graph --all` in a split below the normal editing buffer.
 
@@ -91,11 +91,11 @@ gemini 3.8 flash high
 Approved plan with operational transformation updates.
 
 Claude Code Q/A Context:
-- [Ref 1] How should error correction handle camera tilt exceeding 45°? -> Reject frame with haptic guidance to re-orient.
+• How should error correction handle camera tilt exceeding 45°? → Reject frame with haptic guidance to re-orient.
 
 Reviewed implementation_plan.md:
 
-[Ref 2] Review on "User Review Required":
+[Ref 1] Review on "User Review Required":
 > "> The corner lines must be 60mm long."
 Review: Approved. Ensure 60mm is verified with physical ruler.
 
@@ -110,11 +110,7 @@ Reviewed-At: 2026-09-05T12:00:00Z
 ```text
 Review Anchors (diff -p context):
 
-[Ref 1] implementation_plan.md (Claude Q/A)
-Context: @@ ## User Review Required @@
-- How should error correction handle camera tilt exceeding 45°? -> Reject frame with haptic guidance to re-orient.
-
-[Ref 2] implementation_plan.md:L7
+[Ref 1] implementation_plan.md:L7
 Context: @@ ## User Review Required @@
 Hunk:
   > [!IMPORTANT]
