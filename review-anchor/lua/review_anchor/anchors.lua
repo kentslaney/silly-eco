@@ -160,22 +160,14 @@ function M.delete_anchor_at_cursor(bufnr, winnr)
   return false, nil
 end
 
---- Add a Claude Code Q&A item.
+--- Add a Claude Code Q&A item (prompt snapshot context, no doc anchor).
 ---@param question string
 ---@param answer string
----@param diff_context? string
----@param section_name? string
----@param file_path? string
 ---@return table qa_item
-function M.add_qa(question, answer, diff_context, section_name, file_path)
-  local ref_id = M.get_next_ref_id()
+function M.add_qa(question, answer)
   local qa = {
-    id = ref_id,
     question = vim.trim(question),
     answer = vim.trim(answer),
-    diff_context = diff_context or "@@ Claude Code Q/A @@",
-    section_name = section_name or "General Review",
-    file_path = file_path or "implementation_plan.md",
     created_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
   }
   table.insert(qa_items, qa)

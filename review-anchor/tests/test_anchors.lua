@@ -43,7 +43,7 @@ local updated_anchors = anchors.get_all_anchors()
 assert(updated_anchors[1].line_0indexed == 3, "Expected extmark to track line shift to line 3, got: " .. tostring(updated_anchors[1].line_0indexed))
 
 -- Test 5: Claude Q/A and prompt
-anchors.add_qa("Question test?", "Answer test.", "@@ test @@", "Test Section")
+anchors.add_qa("Question test?", "Answer test.")
 assert(#anchors.get_all_qa() == 1)
 
 anchors.set_prompt("Test prompt")

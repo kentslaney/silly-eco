@@ -109,7 +109,7 @@ function M.attach_buffer(bufnr)
   map("v", "<leader>c", open_visual_comment, "Add review comment to selection")
 
   -- Claude Q/A and prompt capture
-  map("n", "<leader>rq", function() capture.open_qa_capture(bufnr) end, "Add Claude Q/A")
+  map("n", "<leader>rq", capture.open_qa_capture, "Add Claude Q/A")
   map("n", "<leader>rp", capture.open_prompt_capture, "Edit model prompt instructions")
 
   -- Anchor management
