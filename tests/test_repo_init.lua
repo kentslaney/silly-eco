@@ -1,5 +1,5 @@
--- Test repository initialization, license generation, and first prompt without model header
-package.path = package.path .. ";./review-anchor/lua/?.lua;./review-anchor/lua/?/init.lua"
+local root = vim.fn.getcwd()
+package.path = package.path .. ";./lua/?.lua;./lua/?/init.lua;" .. root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua"
 
 local ra = require("review_anchor")
 local license_mod = require("review_anchor.license")

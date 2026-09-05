@@ -5,6 +5,7 @@ local capture = require("review_anchor.capture")
 local diff_p = require("review_anchor.diff_p")
 local git = require("review_anchor.git")
 local splits = require("review_anchor.splits")
+local splash = require("review_anchor.splash")
 
 local M = {}
 
@@ -28,7 +29,8 @@ function M.show_help()
     "    <leader>re    Edit comment on current anchor",
     "",
     "  Git & Splits:",
-    "    <leader>rg    Toggle 'git log --graph --all' split below",
+    "    <leader>rl    Toggle 'git log --graph --all' split below (alias: <leader>rg)",
+    "    <leader>rI    Open repository initialization splash screen for cwd (alias: <leader>rs)",
     "    <leader>rP    Preview formatted Commit Message & Git Notes",
     "    <leader>ry    Copy formatted Commit Message to clipboard",
     "    <leader>rn    Copy Git Notes payload to clipboard",
@@ -170,7 +172,10 @@ function M.attach_buffer(bufnr)
   end, "Edit anchor comment")
 
   -- Git split & actions
+  map("n", "<leader>rl", function() splits.toggle_git_log(vim.api.nvim_get_current_win()) end, "Toggle git log split")
   map("n", "<leader>rg", function() splits.toggle_git_log(vim.api.nvim_get_current_win()) end, "Toggle git log split")
+  map("n", "<leader>rI", function() require("review_anchor.splash").open_init_splash() end, "Repository initialization splash screen")
+  map("n", "<leader>rs", function() require("review_anchor.splash").open_init_splash() end, "Repository initialization splash screen")
   map("n", "<leader>rP", capture.open_preview_window, "Preview commit message and notes")
   map("n", "<leader>ry", git.copy_commit_message, "Copy commit message to clipboard")
   map("n", "<leader>rn", git.copy_git_notes, "Copy Git Notes to clipboard")
@@ -191,63 +196,26 @@ function M.setup(opts)
 end
 
 --- Initialize uninitialized git repository matching GitHub behavior.
---- Prompts for remote source URL and license, runs git init, creates initial commit,
---- creates blank .gitignore, and opens git log and inline instruction splits.
+--- Prompts for remote source URL and license via splash screen, runs git init, creates initial commit,
+--- creates blank .gitignore, and opens inline instruction split.
 ---@param opts? table
 ---@param on_complete? fun()
 function M.init_repo(opts, on_complete)
-  local license_mod = require("review_anchor.license")
+  local splash = require("review_anchor.splash")
   opts = opts or {}
 
-  local function do_init(remote_url, lic_key)
-    vim.fn.system("git init -b main 2>/dev/null || git init")
-    if remote_url and vim.trim(remote_url) ~= "" then
-      vim.fn.system("git remote add origin " .. vim.fn.shellescape(vim.trim(remote_url)))
-    end
-
-    if lic_key and lic_key ~= "None" and license_mod.LICENSES[lic_key] then
-      license_mod.write_license(lic_key, "LICENSE")
-      vim.fn.system("git add LICENSE")
-      vim.fn.system("git commit -m 'Initial commit'")
-    else
-      vim.fn.system("git commit --allow-empty -m 'Initial commit'")
-    end
-
-    -- Add blank .gitignore ready for the first prompt commit
-    local gf = io.open(".gitignore", "a")
-    if gf then gf:close() end
-    vim.fn.system("git add .gitignore")
-
-    config.options.omit_model_header = true
-
-    if on_complete then
-      on_complete()
-    else
-      M.start("", { first_prompt_no_model = true })
-    end
-  end
-
-  if opts.headless or vim.fn.has("gui_running") == 0 and not vim.api.nvim_get_mode().mode:match("[ni]") then
-    -- Headless default
-    do_init(opts.remote_url or "", opts.license or "CC0-1.0")
+  if opts.headless or (vim.fn.has("gui_running") == 0 and not vim.api.nvim_get_mode().mode:match("[ni]")) then
+    splash.execute_init_direct(opts, on_complete)
     return
   end
 
-  vim.ui.input({ prompt = "Enter remote repository URL (leave blank to skip): " }, function(remote_url)
-    local license_items = { "CC0-1.0", "MIT", "GPL-3.0", "Apache-2.0", "BSD-3-Clause", "Unlicense", "None" }
-    vim.ui.select(license_items, {
-      prompt = "Select license for initial commit (matching GitHub):",
-      format_item = function(item)
-        local l = license_mod.LICENSES[item]
-        return l and string.format("%s (%s)", item, l.name) or item
-      end,
-    }, function(choice)
-      do_init(remote_url, choice or "CC0-1.0")
-    end)
-  end)
+  splash.open_init_splash({
+    cwd = opts.cwd or vim.fn.getcwd(),
+    on_complete = on_complete,
+  })
 end
 
---- Start review session on target file or default to inline instructions above git log.
+--- Start review session on target file or default to inline instructions.
 ---@param filepath? string
 ---@param opts? table
 function M.start(filepath, opts)
@@ -261,9 +229,13 @@ function M.start(filepath, opts)
   -- Check if repo is initialized
   local is_git = vim.fn.system("git rev-parse --is-inside-work-tree 2>/dev/null"):gsub("%s+$", "") == "true"
   if not is_git then
-    M.init_repo(opts)
+    M.init_repo(opts, function()
+      M.start(filepath, vim.tbl_extend("force", opts, { first_prompt_no_model = true }))
+    end)
     return
   end
+
+  local should_show_log = (opts.show_git_log ~= nil and opts.show_git_log) or config.options.show_git_log
 
   -- Case A: Implementation plan file provided
   if filepath and filepath ~= "" and (vim.fn.filereadable(filepath) == 1 or filepath:match("%.md$")) then
@@ -273,7 +245,9 @@ function M.start(filepath, opts)
     local main_win = vim.api.nvim_get_current_win()
 
     M.attach_buffer(main_buf)
-    splits.open_git_log(main_win)
+    if should_show_log then
+      splits.open_git_log(main_win)
+    end
 
     if vim.api.nvim_win_is_valid(main_win) then
       pcall(function()
@@ -285,9 +259,11 @@ function M.start(filepath, opts)
     end
   else
     -- Case B: Run without an implementation plan file provided
-    -- Default to just the inline instruction split above the git log (reusing top window so no blank split)
+    -- Default to inline instruction split in top window (git log off by default)
     local top_win = vim.api.nvim_get_current_win()
-    splits.open_git_log(top_win)
+    if should_show_log then
+      splits.open_git_log(top_win)
+    end
 
     local inline = require("review_anchor.inline")
     local ibuf, iwin = inline.open_inline_instructions(nil, top_win)

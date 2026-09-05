@@ -1,5 +1,5 @@
 -- Test diff_p.lua
-package.path = package.path .. ";./review-anchor/lua/?.lua;./review-anchor/lua/?/init.lua"
+package.path = package.path .. ";./lua/?.lua;./lua/?/init.lua"
 
 local diff_p = require("review_anchor.diff_p")
 

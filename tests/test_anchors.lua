@@ -1,5 +1,5 @@
 -- Test anchors.lua
-package.path = package.path .. ";./review-anchor/lua/?.lua;./review-anchor/lua/?/init.lua"
+package.path = package.path .. ";./lua/?.lua;./lua/?/init.lua"
 
 local anchors = require("review_anchor.anchors")
 

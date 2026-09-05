@@ -5,6 +5,7 @@ M.defaults = {
   is_blank = false,
   omit_model_header = false,
   commit_mode = "detailed", -- "detailed" or "model_only"
+  show_git_log = false,
   git_log_cmd = "git --no-pager log --graph --all --decorate --color=always",
   split_height_ratio = 0.35,
   min_split_height = 10,

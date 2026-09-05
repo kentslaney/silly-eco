@@ -1,5 +1,5 @@
 -- Test git.lua
-package.path = package.path .. ";./review-anchor/lua/?.lua;./review-anchor/lua/?/init.lua"
+package.path = package.path .. ";./lua/?.lua;./lua/?/init.lua"
 
 local git = require("review_anchor.git")
 local config = require("review_anchor.config")

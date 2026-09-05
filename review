@@ -10,7 +10,7 @@ if [ $# -gt 0 ]; then
   shift
 fi
 
-PLUGIN_DIR="$SCRIPT_DIR/review-anchor"
+PLUGIN_DIR="$SCRIPT_DIR"
 FIRST_PROMPT_OPT=""
 
 # If repo hasn't been initialized, prompt for remote repo source and/or license

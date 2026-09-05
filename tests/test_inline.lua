@@ -1,5 +1,5 @@
 -- Test inline instructions split and coordination with prompt capture
-package.path = package.path .. ";./review-anchor/lua/?.lua;./review-anchor/lua/?/init.lua"
+package.path = package.path .. ";./lua/?.lua;./lua/?/init.lua"
 
 local ra = require("review_anchor")
 local inline = require("review_anchor.inline")
