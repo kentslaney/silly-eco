@@ -1,7 +1,0 @@
-{
-  "python.analysis.extraPaths": [
-    "src"
-  ],
-  "python.analysis.venvPath": ".",
-  "python.analysis.venv": ".venv"
-}
