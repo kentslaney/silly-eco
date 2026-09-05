@@ -59,4 +59,72 @@ assert(notes:match("Context: @@ ## User Review Required @@"), "diff -p context h
 assert(notes:match("Hunk:"), "Hunk missing in notes")
 assert(not notes:match("Claude Q/A"), "Q/A should not be in Git Notes")
 
+-- Test 5: [blank] New Conversation toggle
+assert(config.options.is_blank == false, "Default is_blank must be false")
+assert(config.get_model_name() == "gemini 3.8 flash high")
+
+local ra = require("review_anchor")
+ra.toggle_blank()
+assert(config.options.is_blank == true, "is_blank must be true after toggle")
+assert(config.get_model_name() == "[blank] gemini 3.8 flash high", "get_model_name must prepend [blank] ")
+
+local blank_commit_msg = git.format_commit_message()
+assert(blank_commit_msg:match("^%[blank%] gemini 3%.8 flash high"), "Commit message must begin with [blank] header")
+
+config.options.commit_mode = "model_only"
+assert(git.format_commit_message() == "[blank] gemini 3.8 flash high", "Model-only mode must include [blank] prefix")
+
+ra.toggle_blank()
+assert(config.options.is_blank == false, "is_blank must be false after second toggle")
+assert(git.format_commit_message() == "gemini 3.8 flash high", "Model-only mode must return to clean model name")
+config.options.commit_mode = "detailed"
+
+-- Test 6: Commit execution stages changes (git add -A)
+local test_dir = vim.fn.tempname()
+vim.fn.mkdir(test_dir, "p")
+local original_cwd = vim.fn.getcwd()
+
+-- Initialize temporary git repo
+vim.fn.system(string.format("git -C %s init && git -C %s config user.name 'Test' && git -C %s config user.email 'test@example.com'",
+  vim.fn.shellescape(test_dir), vim.fn.shellescape(test_dir), vim.fn.shellescape(test_dir)))
+
+-- Switch cwd to temp repo
+vim.cmd("cd " .. vim.fn.fnameescape(test_dir))
+
+-- Write an unstaged file
+local unstaged_file = test_dir .. "/test_plan.md"
+local uf = io.open(unstaged_file, "w")
+uf:write("# Test Plan\nUnstaged content here\n")
+uf:close()
+
+-- Check git status shows untracked/unstaged file
+local status_before = vim.fn.system("git status --porcelain")
+assert(status_before:match("%?%? test_plan%.md"), "File should initially be untracked")
+
+-- Execute commit
+local commit_done = false
+local commit_ok = false
+git.execute_commit(function(ok, msg)
+  commit_done = true
+  commit_ok = ok
+end)
+
+assert(commit_done, "execute_commit callback must be invoked")
+assert(commit_ok, "execute_commit must succeed and stage files")
+
+-- Verify working tree is now clean (file was staged and committed)
+local status_after = vim.fn.system("git status --porcelain")
+assert(vim.trim(status_after) == "", "Working directory should be clean because git add -A was run; got: " .. status_after)
+
+-- Verify git log contains commit and git notes attached
+local last_commit = vim.fn.system("git log -1 --pretty=format:%B")
+assert(last_commit:match("gemini 3%.8 flash high"), "Commit message must match model name")
+
+local last_notes = vim.fn.system("git notes show HEAD")
+assert(last_notes:match("Review Anchors %(diff %-p context%):"), "Git notes must be attached to HEAD")
+
+-- Restore cwd and clean up
+vim.cmd("cd " .. vim.fn.fnameescape(original_cwd))
+vim.fn.delete(test_dir, "rf")
+
 print("✓ test_git_notes.lua passed")

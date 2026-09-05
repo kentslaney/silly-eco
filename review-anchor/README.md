@@ -16,9 +16,9 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
 - **Native Neovim Runtime Wrapper (`./review`)**:
   - Automatically loads the `review_anchor` Lua plugin into the user's existing Neovim configuration.
   - Full native Vim editing: visual mode selections, sub-line and multi-line anchoring, motions (`M`, `zz`, `g`, `G`), undo/redo, and user plugins.
-- **Initial Startup Split**:
-  - Normal buffer on top (the review document).
-  - Horizontal split below displaying `git log --graph --all` with interactive terminal / colors.
+- **Initial Startup Split & Soft-Wrap**:
+  - Normal buffer on top (the review document) with soft-wrapping (`wrap`, `linebreak`, `breakindent`) enabled.
+  - Horizontal split below displaying `git log --graph --all --decorate` with full multi-line entries (ANSI colors).
   - Focus remains immediately in the upper buffer.
 - **Org-Mode Outline & Folding**:
   - `<Tab>`: Cycle fold state for current heading (folded $\to$ children $\to$ expanded).
@@ -34,11 +34,12 @@ Review Anchor enables seamless pair-review between human reviewers and AI models
   - `<leader>rq`: Floating capture window for structured `Q:` and `A:` pairs.
   - `<leader>rp`: Floating capture window for general model prompts / instructions.
 - **Git Notes & Commit Generator**:
-  - Backwards-compatible model name subject (e.g. `gemini 3.8 flash high`).
+  - Backwards-compatible model name subject (e.g. `gemini 3.8 flash high` or `[blank] gemini 3.8 flash high`).
   - RFC 822 trailers (`Review-Doc`, `Review-Anchor`, `Reviewed-By`, `Review-Status`, `Reviewed-At`).
-  - `<leader>rP`: Preview formatted commit message and Git Notes.
+  - `<leader>rP`: Preview formatted commit message and Git Notes (supports `[b]` toggle in preview).
   - `<leader>ry` / `<leader>rn`: Copy commit message / Git Notes to macOS clipboard.
-  - `<leader>rC`: Execute git commit and attach Git Notes to `HEAD`.
+  - `<leader>rC`: Stages all changes (`git add -A`), commits, and attaches Git Notes to `HEAD`.
+  - `<leader>rb`: Toggle `[blank] ` prefix on model name for starting new conversations.
   - `<leader>rt`: Toggle between `detailed` snapshot mode and `model_only` mode.
   - `<leader>rm`: Configure active AI model name.
 
@@ -72,10 +73,11 @@ Or specify a document to review:
 | `<leader>re` | Normal | Edit comment on current anchor |
 | `<leader>rx` / `<C-c><C-c>` | Normal | Toggle checkbox item (`- [ ]` $\leftrightarrow$ `- [x]`) |
 | `<leader>rg` | Normal | Toggle `git log --graph --all` split below |
-| `<leader>rP` | Normal | Preview formatted Git Commit message & Git Notes |
+| `<leader>rP` | Normal | Preview formatted Git Commit message & Git Notes (`[b]` to toggle blank) |
 | `<leader>ry` | Normal | Copy Git Commit message to system clipboard |
 | `<leader>rn` | Normal | Copy Git Notes payload to system clipboard |
-| `<leader>rC` | Normal | Execute Git Commit and attach Git Notes to HEAD |
+| `<leader>rC` | Normal | Stage all changes (`git add -A`), execute Git Commit, attach Git Notes |
+| `<leader>rb` | Normal | Toggle `[blank] ` prefix on model name (denotes new conversation) |
 | `<leader>rm` | Normal | Change AI model name |
 | `<leader>rt` | Normal | Toggle commit mode (`detailed` vs `model_only`) |
 | `<leader>r?` / `<leader>rh` | Normal | Show keybinding cheatsheet |

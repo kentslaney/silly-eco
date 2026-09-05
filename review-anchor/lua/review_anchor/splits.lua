@@ -38,6 +38,7 @@ function M.open_git_log(main_win)
     vim.api.nvim_win_set_option(git_win, "number", false)
     vim.api.nvim_win_set_option(git_win, "relativenumber", false)
     vim.api.nvim_win_set_option(git_win, "signcolumn", "no")
+    vim.api.nvim_win_set_option(git_win, "wrap", false)
   end)
 
   -- Terminal keymaps
@@ -71,6 +72,17 @@ function M.toggle_git_log(main_win)
     M.git_log_win = nil
     M.git_log_buf = nil
   else
+    M.open_git_log(main_win)
+  end
+end
+
+--- Refresh the git log split if it is currently open.
+---@param main_win? integer
+function M.refresh_git_log(main_win)
+  if M.git_log_win and vim.api.nvim_win_is_valid(M.git_log_win) then
+    vim.api.nvim_win_close(M.git_log_win, true)
+    M.git_log_win = nil
+    M.git_log_buf = nil
     M.open_git_log(main_win)
   end
 end

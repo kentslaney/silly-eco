@@ -2,8 +2,9 @@ local M = {}
 
 M.defaults = {
   model_name = "gemini 3.8 flash high",
+  is_blank = false,
   commit_mode = "detailed", -- "detailed" or "model_only"
-  git_log_cmd = "git log --graph --all --oneline --decorate --color=always",
+  git_log_cmd = "git log --graph --all --decorate --color=always",
   split_height_ratio = 0.35,
   min_split_height = 10,
   max_split_height = 20,
@@ -30,6 +31,18 @@ function M.setup_highlights()
   set_hl("ReviewAnchorHunk", { fg = "#6c7086" })
   set_hl("ReviewAnchorHeader", { fg = "#89b4fa", bold = true })
   set_hl("ReviewAnchorBorder", { fg = "#b4befe" })
+end
+
+--- Get effective model name, prepending '[blank] ' if is_blank is enabled.
+---@return string
+function M.get_model_name()
+  local model = M.options.model_name or "gemini 3.8 flash high"
+  model = model:gsub("^%[blank%]%s*", "")
+  if M.options.is_blank then
+    return "[blank] " .. model
+  else
+    return model
+  end
 end
 
 function M.get_reviewer()

@@ -241,37 +241,43 @@ end
 
 --- Preview formatted Commit Message and Git Notes side-by-side or stacked in a floating window.
 function M.open_preview_window()
-  local commit_msg = git.format_commit_message()
-  local notes_msg = git.format_git_notes()
-
   local pbuf, pwin = create_floating_window("Commit & Git Notes Preview", 0.85, 0.75)
 
-  local content = {
-    "================================================================================",
-    "  GIT COMMIT MESSAGE (Model Input Snapshot)",
-    "================================================================================",
-  }
+  local function render()
+    local commit_msg = git.format_commit_message()
+    local notes_msg = git.format_git_notes()
+    local blank_tag = config.options.is_blank and " [blank: ON]" or " [blank: OFF]"
 
-  for _, l in ipairs(vim.split(commit_msg, "\n")) do
-    table.insert(content, l)
+    local content = {
+      "================================================================================",
+      "  GIT COMMIT MESSAGE (Model Input Snapshot)" .. blank_tag,
+      "================================================================================",
+    }
+
+    for _, l in ipairs(vim.split(commit_msg, "\n")) do
+      table.insert(content, l)
+    end
+
+    table.insert(content, "")
+    table.insert(content, "================================================================================")
+    table.insert(content, "  GIT NOTES (refs/notes/commits - diff -p Context Anchors)")
+    table.insert(content, "================================================================================")
+
+    for _, l in ipairs(vim.split(notes_msg, "\n")) do
+      table.insert(content, l)
+    end
+
+    table.insert(content, "")
+    table.insert(content, "--------------------------------------------------------------------------------")
+    table.insert(content, " Actions: [y] Copy Commit  [n] Copy Git Notes  [b] Toggle [blank]  [C] Commit  [q] Close")
+    table.insert(content, "--------------------------------------------------------------------------------")
+
+    vim.bo[pbuf].modifiable = true
+    vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, content)
+    vim.bo[pbuf].modifiable = false
   end
 
-  table.insert(content, "")
-  table.insert(content, "================================================================================")
-  table.insert(content, "  GIT NOTES (refs/notes/commits - diff -p Context Anchors)")
-  table.insert(content, "================================================================================")
-
-  for _, l in ipairs(vim.split(notes_msg, "\n")) do
-    table.insert(content, l)
-  end
-
-  table.insert(content, "")
-  table.insert(content, "--------------------------------------------------------------------------------")
-  table.insert(content, " Actions: [y] Copy Commit  [n] Copy Git Notes  [C] Commit & Attach Notes  [q] Close")
-  table.insert(content, "--------------------------------------------------------------------------------")
-
-  vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, content)
-  vim.bo[pbuf].modifiable = false
+  render()
 
   local function close()
     if vim.api.nvim_win_is_valid(pwin) then
@@ -286,6 +292,12 @@ function M.open_preview_window()
   end, { buffer = pbuf, nowait = true })
   vim.keymap.set("n", "n", function()
     git.copy_git_notes()
+  end, { buffer = pbuf, nowait = true })
+  vim.keymap.set("n", "b", function()
+    config.options.is_blank = not config.options.is_blank
+    render()
+    local status = config.options.is_blank and "ENABLED ([blank] prepended)" or "DISABLED"
+    vim.notify("New conversation toggle: " .. status, vim.log.levels.INFO, { title = "Review Anchor" })
   end, { buffer = pbuf, nowait = true })
   vim.keymap.set("n", "C", function()
     git.execute_commit(function(ok, _)

@@ -91,6 +91,9 @@ end
 ---@param bufnr integer
 function M.setup_buffer(bufnr)
   pcall(function()
+    vim.wo[0].wrap = true
+    vim.wo[0].linebreak = true
+    vim.wo[0].breakindent = true
     vim.wo[0].foldmethod = "expr"
     vim.wo[0].foldexpr = "v:lua.require'review_anchor.outline'.foldexpr(v:lnum)"
     vim.wo[0].foldtext = "v:lua.require'review_anchor.outline'.foldtext()"

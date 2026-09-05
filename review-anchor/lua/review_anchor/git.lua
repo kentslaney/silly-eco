@@ -21,7 +21,7 @@ end
 ---@return string
 function M.format_commit_message()
   local mode = config.options.commit_mode
-  local model = config.options.model_name
+  local model = config.get_model_name()
 
   if mode == "model_only" then
     return model
@@ -135,6 +135,18 @@ end
 --- Execute git commit and attach Git Notes.
 ---@param on_complete? fun(success: boolean, message: string)
 function M.execute_commit(on_complete)
+  -- Save all open modified buffers
+  vim.cmd("silent! wall")
+
+  -- Stage all changes before committing
+  local add_output = vim.fn.system("git add -A 2>&1")
+  local add_exit = vim.v.shell_error
+  if add_exit ~= 0 then
+    vim.notify("Git add failed:\n" .. add_output, vim.log.levels.ERROR, { title = "Review Anchor" })
+    if on_complete then on_complete(false, add_output) end
+    return
+  end
+
   local commit_msg = M.format_commit_message()
   local notes_msg = M.format_git_notes()
 
@@ -188,6 +200,9 @@ function M.execute_commit(on_complete)
 
   local success_msg = "Git commit created & Git Notes attached to HEAD!"
   vim.notify(success_msg, vim.log.levels.INFO, { title = "Review Anchor" })
+  pcall(function()
+    require("review_anchor.splits").refresh_git_log()
+  end)
   if on_complete then on_complete(true, success_msg) end
 end
 

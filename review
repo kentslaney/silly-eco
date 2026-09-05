@@ -20,5 +20,6 @@ PLUGIN_DIR="$SCRIPT_DIR/review-anchor"
 
 exec nvim \
   --cmd "set rtp^=$PLUGIN_DIR" \
+  -c "setlocal wrap linebreak breakindent" \
   -c "lua require('review_anchor').start([[$TARGET]])" \
   "$TARGET" "$@"

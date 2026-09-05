@@ -34,21 +34,36 @@ function M.show_help()
     "    <leader>rn    Copy Git Notes payload to clipboard",
     "    <leader>rC    Execute Git Commit and attach Git Notes to HEAD",
     "    <leader>rm    Configure AI model name (default: gemini 3.8 flash high)",
+    "    <leader>rb    Toggle [blank] new conversation prefix",
     "    <leader>rt    Toggle commit mode (detailed snapshot <-> model-only)",
     "    <leader>r?    Show this help cheatsheet",
   }
   vim.notify(table.concat(help_lines, "\n"), vim.log.levels.INFO, { title = "Review Anchor" })
 end
 
+--- Toggle prepending '[blank] ' to model name (denoting a new conversation).
+function M.toggle_blank()
+  config.options.is_blank = not config.options.is_blank
+  local status = config.options.is_blank and "ENABLED ([blank] prepended)" or "DISABLED"
+  vim.notify(string.format("New conversation toggle: %s\nSubject: %s", status, config.get_model_name()),
+             vim.log.levels.INFO, { title = "Review Anchor" })
+end
+
 --- Change model name interactively.
 function M.prompt_model_name()
+  local current_base = (config.options.model_name or ""):gsub("^%[blank%]%s*", "")
   vim.ui.input({
     prompt = "Enter Model Name: ",
-    default = config.options.model_name,
+    default = current_base,
   }, function(input)
     if input and vim.trim(input) ~= "" then
-      config.options.model_name = vim.trim(input)
-      vim.notify("Model set to: " .. config.options.model_name, vim.log.levels.INFO, { title = "Review Anchor" })
+      local clean = vim.trim(input)
+      if clean:match("^%[blank%]%s*") then
+        config.options.is_blank = true
+        clean = clean:gsub("^%[blank%]%s*", "")
+      end
+      config.options.model_name = clean
+      vim.notify("Model set to: " .. config.get_model_name(), vim.log.levels.INFO, { title = "Review Anchor" })
     end
   end)
 end
@@ -69,6 +84,21 @@ function M.attach_buffer(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
 
   outline.setup_buffer(bufnr)
+
+  -- Ensure soft-wrapping is enabled for editor window(s) displaying this buffer
+  local wins = vim.fn.win_findbuf(bufnr)
+  for _, win in ipairs(wins) do
+    pcall(function()
+      vim.api.nvim_set_option_value("wrap", true, { win = win })
+      vim.api.nvim_set_option_value("linebreak", true, { win = win })
+      vim.api.nvim_set_option_value("breakindent", true, { win = win })
+    end)
+  end
+  pcall(function()
+    vim.wo.wrap = true
+    vim.wo.linebreak = true
+    vim.wo.breakindent = true
+  end)
 
   local map = function(mode, lhs, rhs, desc)
     vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, silent = true, desc = "ReviewAnchor: " .. desc })
@@ -138,6 +168,7 @@ function M.attach_buffer(bufnr)
   map("n", "<leader>rn", git.copy_git_notes, "Copy Git Notes to clipboard")
   map("n", "<leader>rC", function() git.execute_commit() end, "Execute commit & notes")
   map("n", "<leader>rm", M.prompt_model_name, "Set model name")
+  map("n", "<leader>rb", M.toggle_blank, "Toggle [blank] new conversation prefix")
   map("n", "<leader>rt", M.toggle_commit_mode, "Toggle commit mode")
   map("n", "<leader>r?", M.show_help, "Show help cheatsheet")
   map("n", "<leader>rh", M.show_help, "Show help cheatsheet")
@@ -171,8 +202,13 @@ function M.start(filepath)
   -- Open git log --graph --all in split below
   splits.open_git_log(main_win)
 
-  -- Ensure focus returns to main buffer window
+  -- Ensure focus returns to main buffer window with soft-wrap enabled
   if vim.api.nvim_win_is_valid(main_win) then
+    pcall(function()
+      vim.api.nvim_set_option_value("wrap", true, { win = main_win })
+      vim.api.nvim_set_option_value("linebreak", true, { win = main_win })
+      vim.api.nvim_set_option_value("breakindent", true, { win = main_win })
+    end)
     vim.api.nvim_set_current_win(main_win)
   end
 

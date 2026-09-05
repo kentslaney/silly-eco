@@ -17,4 +17,14 @@ assert(#windows >= 2, "Expected at least 2 windows (normal buffer + git log spli
 -- Verify current window is the upper (normal) buffer window
 assert(current_win == windows[1], "Active focus must be in upper normal window")
 
+-- Verify editor has soft-wrap enabled
+assert(vim.wo[current_win].wrap == true, "Editor window must have wrap enabled (soft-wrap)")
+assert(vim.wo[current_win].linebreak == true, "Editor window must have linebreak enabled")
+assert(vim.wo[current_win].breakindent == true, "Editor window must have breakindent enabled")
+
+-- Verify git log command does not collapse entries to one line
+local config = require("review_anchor.config")
+assert(not config.options.git_log_cmd:match("%-%-oneline"), "git_log_cmd must not contain --oneline")
+assert(config.options.git_log_cmd:match("%-%-graph"), "git_log_cmd must contain --graph")
+
 print("✓ test_startup.lua passed")
