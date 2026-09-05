@@ -1,28 +1,32 @@
 # Implementation Plan - AVP Spatial Target Studio, Error-Correcting Pen-Drawn Fiducials & "Silly Bells" Serverless Ecosystem
 
 Build an end-to-end spatial computing ecosystem featuring:
-1. **Apple Vision Pro (AVP) App ("TargetStudio AVP")**: Spatial authoring tool to place and configure spherical targets in physical space, calibrate a reference origin, measure user hand dimensions to render targets held up by realistically scaled 3D hands, and generate/print a precision fiducial sheet (portrait or landscape).
-2. **Precision Paper Fiducial with Pen-Drawn Line Segments**: Printable reference sheet (PDF/AirPrint) in portrait or landscape format featuring a central course QR code, printed coordinate guides/ruler ticks along the margins, and designated zones for user pen-drawn line segments. The pen marks allow the paper to be slightly displaced or re-positioned without losing course alignment, and encode physical scale correction.
-3. **Free Scanner & Calibration App ("TargetScanner Free" - iOS & visionOS)**: AR scanner that detects the paper QR code, printed coordinate guides, and pen-drawn line segments. Includes an **Interactive Point Adjustment UI** allowing the user to manually reposition detected points on screen, computes scale correction, renders targets held up by 3D hands sized to the user, and bridges directly to the connected $1 iOS app **"Silly Bells"**.
+1. **Apple Vision Pro (AVP) App ("TargetStudio AVP")**: Spatial authoring tool to place and configure spherical targets in physical space, calibrate a reference origin, measure user hand dimensions to render targets held up by realistically scaled 3D hands in visionOS, and generate/print a precision fiducial sheet (portrait or landscape).
+2. **Precision Paper Fiducial with Pen-Drawn Corner Line Segments**: Printable reference sheet (PDF/AirPrint) in portrait or landscape format featuring a central course QR code, printed coordinate guides/ruler ticks along the margins, and calibration line segments drawn with pen starting directly from the **4 corners of the QR code**. A line segment length of **0 represents the identity transformation**. Deviations in length and orientation encode paper displacement ($\Delta \mathbf{R}, \Delta \mathbf{t}$) and metric scale correction factor ($s$).
+3. **Free Scanner & Calibration App ("TargetScanner Free" - iOS & visionOS)**: AR scanner that detects the paper QR code, printed coordinate guides, and pen-drawn corner line segments. Includes an **Interactive Point Adjustment UI** allowing the user to manually reposition detected points on screen, computes scale correction, renders targets held up by:
+   - **Handheld AR (iOS)**: A rounded rectangle the physical size of the device rendered tangent to the spherical target oriented upwards on the device.
+   - **Spatial visionOS**: 3D hands dynamically sized to the user's measured hand dimensions.
+   - Bridges directly to the connected $1 iOS app **"Silly Bells"**.
 4. **100% Serverless & Decentralized Sharing**: Zero server hosting. All course geometry, target configs, paper orientation, and scale corrections are fully self-contained in the printed QR code and deep links (`sillybells://course?v=2&data=...`), with local file storage and peer-to-peer AirDrop/iMessage export.
 5. **Connected $1 App ("Silly Bells" - iOS)**: The existing paid app opened via deep link, loading course data and the error-corrected, scale-calibrated origin for active gameplay.
-6. **TargetCore Framework**: Shared Swift package containing course data models, portrait/landscape coordinate geometry, pen-line alignment and scale-correction solvers, PDF printable sheet generator, and compact payload codecs.
+6. **TargetCore Framework**: Shared Swift package containing course data models, portrait/landscape coordinate geometry, pen-line corner alignment and scale-correction solvers, PDF printable sheet generator, and compact payload codecs.
 
 ---
 
 ## User Review Required
 
 > [!IMPORTANT]
-> **Pen-Drawn Line Segments & Paper Displacement**:
-> Line segments are drawn onto the surface or paper with a pen during setup. If the printed paper is subsequently bumped, shifted, or replaced slightly off its original position, the scanner compares the printed coordinate guides with the pen-drawn marks to compute the relative paper displacement $\Delta \mathbf{T} = [\Delta \mathbf{R} \mid \Delta \mathbf{t}]$ and restore the exact authoring origin.
+> **Pen-Drawn Corner Line Segments & Identity at 0 Length**:
+> The 4 line segments start precisely from the 4 corners of the central QR code. A length of **0** represents the nominal identity transformation (no paper shift, nominal 1.0 scale). Drawing outward from the corners encodes paper displacement tolerance and scale correction. If the printed paper is shifted relative to marks drawn onto the underlying desk/surface, the scanner solves for the offset.
 
 > [!IMPORTANT]
 > **Interactive Manual Point Adjustment**:
-> Because ink visibility, lighting, or paper warping can affect computer vision line detection, the scanner HUD provides draggable touch/pinch reticles on each detected endpoint. The user can fine-tune point positions manually on top of the camera feed, with instant reprojection feedback.
+> The scanner HUD provides draggable touch/pinch reticles on each corner segment endpoint. The user can fine-tune point positions manually on top of the camera feed, with instant reprojection feedback.
 
 > [!IMPORTANT]
-> **Targets Held by User-Scaled 3D Hands**:
-> Floating billboard distance tags are eliminated. Instead, each target sphere is rendered resting in a 3D hand entity. On visionOS (AVP), ARKit hand tracking measures the user's actual hand dimensions (wrist to fingertips, palm span) to dynamically scale the 3D hand model. On iOS, the scanner uses standard anthropometric hand scaling with a quick-calibration slider.
+> **Target Visualization: Handheld AR vs. visionOS Spatial**:
+> - **Handheld AR (iOS)**: Targets are rendered with a rounded rectangle matching the physical dimensions of the iOS device (e.g. iPhone bezel/screen aspect ratio) rendered tangent to the bottom of the spherical target, oriented upwards on the device.
+> - **Spatial (visionOS)**: Targets are held up by 3D hands dynamically sized to the user's hand dimensions measured via ARKit `HandTrackingProvider`.
 
 > [!IMPORTANT]
 > **No Community Server (100% Serverless)**:
@@ -35,9 +39,9 @@ Build an end-to-end spatial computing ecosystem featuring:
 ```
 +---------------------------------------------------------------------------------------+
 |                                      TargetCore                                       |
-|  - Course & SphericalTarget Models (3D relative coordinates, hand-anchor pose, radius) |
+|  - Course & SphericalTarget Models (3D coordinates, hand/device anchor pose, radius)  |
 |  - PrintableSheetRenderer (Vector PDF: Portrait & Landscape, QR + Coordinate Guides)  |
-|  - PenLineCalibrationEngine (Paper displacement solver, scale correction calculator)  |
+|  - CornerLineCalibrationEngine (4 QR corners, 0-length = identity, scale correction)  |
 |  - CompactCourseCodec (High-density compressed binary / Base64 URL serialization)     |
 |  - LocalCourseStore (Sandboxed file store for local saving, import/export)            |
 +-------------------------------------------+-------------------------------------------+
@@ -50,10 +54,11 @@ Build an end-to-end spatial computing ecosystem featuring:
 |              (visionOS)               |              |           (iOS & visionOS)            |
 | - ImmersiveSpace 3D target authoring  |              | - ARKit Camera & Vision Line Detector |
 | - HandTrackingProvider hand sizing    |              | - Interactive Point Adjustment HUD    |
-| - RealityKit 3D Hand-Held Targets     |              | - Scale & Paper Shift Error Refinement|
-| - Portrait/Landscape PDF Sheet Export |              | - RealityKit Hand-Held Target Preview |
-| - Local Course Manager & QR Generator |              | - "Open in Silly Bells ($1)" Bridge   |
-+---------------------------------------+              +-------------------+-------------------+
+| - RealityKit 3D Hand-Held Targets     |              | - 0-length identity Corner Solver     |
+| - Portrait/Landscape PDF Sheet Export |              | - Handheld AR: Device-sized Rounded   |
+| - Local Course Manager & QR Generator |              |   Rectangle Tangent to Target Sphere  |
++---------------------------------------+              | - "Open in Silly Bells ($1)" Bridge   |
+                                                       +-------------------+-------------------+
                                                                            |
                                                                            | sillybells://course?data=...
                                                                            v
@@ -81,46 +86,50 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS wit
 #### [NEW] `Sources/TargetCore/Models/Course.swift`
 - `PaperOrientation`: `enum` (`portrait`, `landscape`).
 - `PaperFormat`: `enum` (`letter`, `a4`, `custom(widthMm: Float, heightMm: Float)`).
-- `PenLineSegment`:
-  - `id: UUID`
-  - `startAnchor: SIMD2<Float>` (paper coordinates in mm)
-  - `endAnchor: SIMD2<Float>` (paper coordinates in mm)
-  - `nominalLengthMm: Float` (physical reference length for scale correction)
-  - `drawnOnSurface: Bool` (whether drawn on underlying table/floor across the paper boundary)
+- `QRCorner`: `enum` (`topLeft`, `topRight`, `bottomRight`, `bottomLeft`).
+- `CornerLineSegment`:
+  - `corner: QRCorner` (base anchor at QR corner)
+  - `endpoint: SIMD2<Float>` (paper coordinates in mm)
+  - `lengthMm: Float` (0 = identity transformation)
+  - `nominalScaleLengthMm: Float` (reference length corresponding to 1.0 metric scale)
 - `SphericalTarget`:
   - `id: UUID`
   - `position: SIMD3<Float>` (meters relative to calibrated origin)
   - `radius: Float` (0.05m – 0.50m)
   - `colorHex: String`
   - `pointValue: Int`
-  - `handPose`: Grip angle, wrist elevation, and tilt for the supporting 3D hand.
+- `DevicePhysicalProfile`:
+  - Helper providing physical device dimensions (width, height, thickness, corner radius in meters) for the tangent rounded-rectangle rendering on iOS devices.
 - `Course`:
   - `id: UUID`, `title: String`, `authorName: String`
   - `paperOrientation: PaperOrientation`, `paperFormat: PaperFormat`
-  - `referenceSegments: [PenLineSegment]` (segments encoding scale & offset)
+  - `qrSizeMm: Float` (nominal physical width of QR code, e.g. 100mm)
+  - `cornerSegments: [CornerLineSegment]` (4 segments starting at QR corners)
   - `targets: [SphericalTarget]`
   - `createdAt: Date`
 
-#### [NEW] `Sources/TargetCore/Geometry/PenLineCalibrationEngine.swift`
-- Mathematical representation of paper displacement and metric scale correction:
-  - **Paper Shift Solver**: Computes translation $\Delta \mathbf{t}$ and rotation $\Delta \mathbf{R}$ when the physical paper moves relative to pen lines drawn onto the supporting surface.
-  - **Scale Correction Calculator**: Compares the observed pixel/3D length of pen-drawn line segments between known guide points against `nominalLengthMm`, deriving scale factor $s = \frac{L_{measured}}{L_{nominal}}$. Applies uniform metric scaling $\mathbf{x}_{world} = s \cdot \mathbf{x}_{author}$.
-  - **Manual Point Refinement**: Takes updated 2D screen coordinates from the Interactive Point Adjustment HUD and recalculates the refined 6-DoF pose and scale factor via Levenberg-Marquardt / PnP optimization.
+#### [NEW] `Sources/TargetCore/Geometry/CornerLineCalibrationEngine.swift`
+- Mathematical representation of corner line segments:
+  - Base points: $\mathbf{c}_i \in \{TL, TR, BR, BL\}$ computed from QR code geometry.
+  - If $\forall i, \|\mathbf{p}_i - \mathbf{c}_i\| = 0$: Returns **Identity Transformation** ($\mathbf{T} = \mathbf{I}$, scale $s = 1.0$).
+  - Displacement & Orientation: When pen lines extend from the 4 corners, solves for paper displacement relative to marks drawn onto the surface:
+    $$\min_{\Delta \mathbf{R}, \Delta \mathbf{t}, s} \sum_{i=1}^4 \|\pi(\mathbf{K} \cdot (\Delta \mathbf{R} \mathbf{P}_i + \Delta \mathbf{t})) - \mathbf{u}_i\|^2$$
+  - Scale Correction: Evaluates the line segment lengths relative to nominal guide lengths, yielding uniform scale $s = \frac{L_{observed}}{L_{nominal}}$.
+  - Manual Point Refinement: Ingests user-adjusted screen coordinates from the touch/drag HUD and updates the solved pose and scale in real-time.
 
 #### [NEW] `Sources/TargetCore/Rendering/PrintableSheetRenderer.swift`
 - Generates vector PDF and high-res printable images for AirPrint / export:
   - Supports both **Portrait** ($215.9 \times 279.4$ mm Letter / $210 \times 297$ mm A4) and **Landscape** formats.
   - Central high-contrast course QR code.
   - Precision coordinate guides printed outside the QR code:
-    - Metric millimeter ruler ticks along outer margins.
-    - Alignment crosshairs and corner boxes.
-    - Pen Drawing Zones: High-contrast guidelines indicating where to draw pen calibration segments bridging the paper and desk/floor.
-    - Scale calibration reference ruler ("50 mm Reference Bar").
+    - 4 corner crosshairs radiating from the QR corners with millimeter tick marks.
+    - Outer margin metric rulers along X and Y axes.
+    - Clear instructions: "Segments start at the 4 QR corners. 0 length = standard identity calibration."
 
 #### [NEW] `Sources/TargetCore/Serialization/CompactCourseCodec.swift`
 - Ultra-compact binary/Base64 serialization designed to fit inside a single high-density QR code (Version 15–25) and offline URL schemes:
   - Header: 1-byte version + 1-byte flags (orientation: portrait/landscape, format).
-  - Encoded line segment anchors (16-bit fixed-point millimeters).
+  - 4 corner line vectors: 16-bit packed offsets $(\Delta x_i, \Delta y_i)$ relative to corners (0,0 when identity).
   - Targets: 16-bit compressed relative coordinates $(x, y, z)$ + 8-bit radius + 8-bit color index + 8-bit score.
   - Deflate/gzip compression + URL-safe Base64 encoding.
   - Produces deep links: `sillybells://course?v=2&data=<compact_base64>`.
@@ -133,11 +142,11 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS wit
 
 #### [NEW] `Tests/TargetCoreTests/TargetCoreTests.swift`
 - Unit tests verifying:
-  - Compact serialization & deserialization round-trip into `< 400` byte payloads.
-  - Paper orientation (portrait vs landscape) transform math.
-  - Scale correction derived from pen line lengths.
-  - Paper displacement solver with simulated offset and rotation.
-  - PDF sheet generation across portrait and landscape orientations.
+  - 0-length corner line segments produce exact identity transform and $s=1.0$.
+  - Corner line displacement solver handles simulated rotation, translation, and scale changes.
+  - Compact binary serialization round-trips into `< 350` bytes.
+  - Portrait and landscape PDF generation dimensions and coordinate guide alignment.
+  - DevicePhysicalProfile dimensions calculation.
 
 ---
 
@@ -155,20 +164,19 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS wit
 
 #### [NEW] `Sources/TargetStudioAVP/Views/SpatialTargetAuthoringView.swift`
 - `RealityView` in `ImmersiveSpace`:
-  - Visual Origin: Renders 3D sheet preview with coordinate guides and drawn line anchors.
-  - **Hand-Held Target Entities**: Targets are not floating billboard tags. Each target sphere rests in a 3D hand model scaled precisely to the user's hand size.
-  - Gestures: Drag to reposition target in 3D space; virtual hand moves with target, dynamically orienting its palm to support the sphere.
+  - Visual Origin: Renders 3D sheet preview with coordinate guides and corner rays.
+  - **Hand-Held Target Entities**: Targets are held up by 3D hands dynamically sized to the user's hand measurements.
+  - Gestures: Drag to reposition target in 3D space; virtual hand moves with target.
   - Visual indicator of current metric scale and distance.
 
 #### [NEW] `Sources/TargetStudioAVP/Views/TargetInspectorPalette.swift`
 - Floating spatial palette:
   - Radius slider (5cm to 50cm).
   - Target color selector & point value.
-  - Hand orientation controls (wrist tilt, palm angle).
   - Paper format toggle: Portrait vs Landscape.
 
 #### [NEW] `Sources/TargetStudioAVP/Views/PrintSheetModalView.swift`
-- Preview printable sheet in Portrait or Landscape with coordinate guides.
+- Preview printable sheet in Portrait or Landscape with coordinate guides and corner markings.
 - AirPrint (`UIPrintInteractionController`) and system PDF export (`ShareLink`).
 
 ---
@@ -181,24 +189,24 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS wit
 #### [NEW] `Sources/TargetScannerFree/Views/ARScannerView.swift`
 - Camera viewport with `AVFoundation` + `Vision`:
   - Detects QR code barcode (`VNDetectBarcodesRequest`).
-  - Detects pen line segments and printed coordinate guides (`VNDetectLineSegmentsRequest` + contour analysis).
-  - Displays HUD status: "Align with Paper Fiducial" $\to$ "Pen Segments Detected" $\to$ "Origin & Scale Calibrated".
+  - Detects pen line segments radiating from the 4 QR corners (`VNDetectLineSegmentsRequest` + corner-proximity clustering).
+  - Evaluates corner lines: if no lines detected, defaults to 0-length identity calibration.
 
 #### [NEW] `Sources/TargetScannerFree/Views/InteractivePointAdjustmentView.swift`
 - Draggable touch/pinch overlay on top of camera feed:
-  - Displays detected endpoints of pen line segments as interactive handles with magnified loupes.
-  - Allows user to manually drag any point if ink has changed, faded, or if paper moved slightly.
+  - Displays detected endpoints of the 4 corner line segments with interactive handles and magnified circular loupes.
+  - Allows user to manually snap or drag endpoints (including snapping back to 0-length corner for identity).
   - Real-time readout of computed scale correction factor ($s$) and displacement residuals.
-  - "Lock Origin" confirmation button once points are aligned.
+  - "Lock Origin" confirmation button.
 
 #### [NEW] `Sources/TargetScannerFree/Views/ARRealityPreviewView.swift`
 - RealityKit scene rendering author-placed targets:
-  - Targets held up by user-scaled 3D hands anchored to the corrected origin.
-  - iOS hand scale adjustment: ergonomic preset (Small / Medium / Large) or quick on-screen palm measurement.
-  - Interactive hit/ping preview to verify 3D positioning in the physical space.
+  - **Handheld AR Mode (iOS)**: Renders a rounded rectangle matching the physical dimensions of the iOS device, positioned tangent to the bottom of the spherical target and oriented upwards on the device.
+  - **Spatial Mode (visionOS)**: Renders user-scaled 3D hands holding the target spheres.
+  - Interactive hit/ping preview to verify 3D positioning in physical space.
 
 #### [NEW] `Sources/TargetScannerFree/Views/LocalCourseLibraryView.swift`
-- Replaces former community browser:
+- Local course browser:
   - Lists locally saved and previously scanned courses.
   - "Scan New Sheet" button.
   - File import/export: AirDrop or share `.sillycourse` files.
@@ -227,16 +235,16 @@ A standalone Swift package compiling cleanly across iOS, visionOS, and macOS wit
 Commit messages and audit trail adhere to the RFC 822 trailers and Git Notes standard:
 
 ```text
-feat(calibration): support pen-drawn line segments and interactive point adjustment
+feat(calibration): corner line calibration with 0-length identity and handheld device tangent visualization
 
-Implement pen line displacement solver, scale correction factor,
-and interactive touch handles for manually moving line endpoints in AR.
+Implement 4 QR corner line calibration (0-length = identity), scale correction,
+and handheld AR rounded rectangle device visualization tangent to target spheres.
 
 Review-Doc: implementation_plan.md
 Review-Anchor: #component-1-targetcore-shared-multi-platform-swift-package
 Reviewed-By: Kent Slaney <kent@slaney.org>
 Review-Status: Approved
-Approved-At: 2026-09-05T12:30:00-07:00
+Approved-At: 2026-09-05T12:48:00-07:00
 ```
 
 ---
@@ -248,11 +256,12 @@ Approved-At: 2026-09-05T12:30:00-07:00
   ```bash
   swift test
   ```
+  - Verify 0-length corner line segments produce exact identity transform and $s=1.0$.
+  - Verify displacement calculation when corner line segments have non-zero lengths.
+  - Verify scale factor calculation: $s = \frac{L_{observed}}{L_{nominal}}$.
   - Verify compact binary codec round-trip produces valid payloads for QR codes.
-  - Verify pen line displacement solver correctly calculates $\Delta \mathbf{R}$ and $\Delta \mathbf{t}$ under simulated paper shift.
-  - Verify scale factor calculation: $s = \frac{L_{observed}}{L_{nominal}}$ under intentional scale variations (90%, 100%, 110%).
-  - Verify PDF generation generates correct dimensions and guide positions for both Portrait (Letter/A4) and Landscape (Letter/A4).
-  - Verify local course store save, load, and `.sillycourse` file export/import.
+  - Verify PDF generation generates correct dimensions and corner guides for both Portrait and Landscape.
+  - Verify `DevicePhysicalProfile` dimensions for common iPhone/iPad models.
 
 ### Build Verification
 - Compile and build `TargetCore` across platforms:
@@ -266,11 +275,9 @@ Approved-At: 2026-09-05T12:30:00-07:00
   ```
 
 ### Manual & Interactive Verification
-1. **Interactive Point Adjustment**: In iOS Simulator/device, simulate camera feed with misaligned endpoints; drag point handles with touch, verify loupe magnification, and verify calibrated pose updates immediately.
-2. **Scale Correction**: Test with a printed sheet scaled to 90%; draw calibration segment, verify computed scale matches 0.90, and target positions scale accordingly.
-3. **Paper Displacement**: Slightly nudge paper fiducial; verify pen marks on desk/surface allow solver to maintain stable target positions in world space.
-4. **User-Scaled 3D Hands**: On visionOS, author targets and observe 3D hands holding spheres; verify hands match user hand tracking scale rather than floating billboard text.
-5. **Portrait & Landscape Sheet Generation**: Inspect generated PDFs; verify crisp QR code, margin millimeter rulers, and pen drawing guides in both orientations.
-6. **100% Serverless Sharing & Silly Bells Bridge**:
-   - Save course locally, export as QR code, scan from second device.
-   - Tap "Play in Silly Bells ($1)", verify deep link payload `sillybells://course?v=2&data=...` launches the app with course data without any network requests.
+1. **0-Length Identity**: Test scanner when no corner lines are drawn; verify identity transform ($s=1.0, \Delta \mathbf{R}=\mathbf{I}, \Delta \mathbf{t}=\mathbf{0}$) is applied immediately.
+2. **Corner Line Adjustment**: Simulate or draw pen lines starting from the 4 QR corners; drag point handles with touch loupe; verify solved origin adjusts smoothly.
+3. **Handheld AR Device Tangent Visualization**: In iOS AR preview, verify spherical targets are rendered with a device-sized rounded rectangle tangent to the bottom of the sphere, oriented upwards on the device.
+4. **visionOS User Hand Sizing**: On AVP, verify authoring space renders 3D hands matching the user's measured hand skeleton.
+5. **Portrait & Landscape PDFs**: Generate and visually check both Portrait and Landscape printable sheets.
+6. **100% Serverless & Silly Bells Bridge**: Test local `.sillycourse` file export and `sillybells://course?v=2&data=...` deep link offline.
